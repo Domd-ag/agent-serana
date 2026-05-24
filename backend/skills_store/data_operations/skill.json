@@ -1,0 +1,95 @@
+{
+  "name": "data_operations",
+  "version": "1.0.0",
+  "description": "本地文本与数据处理工具包。",
+  "author": "Serana Team",
+  "format": "sebastian_package",
+  "runtime": "python",
+  "instruction_file": "SKILL.md",
+  "entrypoint": "__init__.py",
+  "agent_type": "all",
+  "max_instances": 3,
+  "tools": [
+    {
+      "name": "text_stats",
+      "description": "计算基础文本统计信息。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要分析的文本。" }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "json_pretty",
+      "description": "格式化 JSON 字符串。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "json_str": { "type": "string", "description": "JSON 字符串。" },
+          "indent": {
+            "type": "integer",
+            "description": "缩进空格数。",
+            "default": 2
+          }
+        },
+        "required": ["json_str"]
+      }
+    },
+    {
+      "name": "extract_keywords",
+      "description": "从文本中提取简单关键词。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要处理的文本。" },
+          "limit": {
+            "type": "integer",
+            "description": "最多返回多少个关键词。",
+            "default": 5
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "word_frequency",
+      "description": "统计高频词。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要处理的文本。" },
+          "limit": {
+            "type": "integer",
+            "description": "最多返回多少个词。",
+            "default": 10
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "base64_encode",
+      "description": "将文本编码为 Base64。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要编码的文本。" }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "base64_decode",
+      "description": "将 Base64 文本解码为原文。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "b64_str": { "type": "string", "description": "Base64 输入内容。" }
+        },
+        "required": ["b64_str"]
+      }
+    }
+  ]
+}

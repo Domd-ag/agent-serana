@@ -1,0 +1,91 @@
+{
+  "name": "note_manager",
+  "version": "1.0.0",
+  "description": "本地笔记管理工具包，当前使用内存存储。",
+  "author": "Serana Team",
+  "format": "sebastian_package",
+  "runtime": "python",
+  "instruction_file": "SKILL.md",
+  "entrypoint": "__init__.py",
+  "agent_type": "all",
+  "max_instances": 3,
+  "tools": [
+    {
+      "name": "create_note",
+      "description": "创建一条新笔记。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "笔记标题。" },
+          "content": { "type": "string", "description": "笔记内容。" },
+          "tags": {
+            "type": "array",
+            "description": "可选的笔记标签。",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["title", "content"]
+      }
+    },
+    {
+      "name": "get_note",
+      "description": "按 ID 获取笔记。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "note_id": { "type": "string", "description": "笔记 ID。" }
+        },
+        "required": ["note_id"]
+      }
+    },
+    {
+      "name": "search_notes",
+      "description": "按关键词或标签搜索笔记。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "keyword": { "type": "string", "description": "搜索关键词。" },
+          "tag": { "type": "string", "description": "标签筛选。" }
+        }
+      }
+    },
+    {
+      "name": "update_note",
+      "description": "更新笔记标题或内容。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "note_id": { "type": "string", "description": "笔记 ID。" },
+          "title": { "type": "string", "description": "更新后的标题。" },
+          "content": { "type": "string", "description": "更新后的内容。" }
+        },
+        "required": ["note_id"]
+      }
+    },
+    {
+      "name": "delete_note",
+      "description": "删除一条笔记。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "note_id": { "type": "string", "description": "笔记 ID。" }
+        },
+        "required": ["note_id"]
+      }
+    },
+    {
+      "name": "list_notes",
+      "description": "按数量上限列出笔记。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "最多返回多少条笔记。",
+            "default": 10
+          }
+        }
+      }
+    }
+  ]
+}

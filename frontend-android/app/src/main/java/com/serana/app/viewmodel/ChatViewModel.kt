@@ -1,0 +1,564 @@
+package com.serana.app.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.serana.app.data.api.AuditInsightsDto
+import com.serana.app.data.api.ChatStreamEvent
+import com.serana.app.data.api.ChatCompletionResponseDto
+import com.serana.app.data.api.ChatDebugResponseDto
+import com.serana.app.data.api.ChatMessageDto
+import com.serana.app.data.api.RetrofitClient
+import com.serana.app.data.api.SendMessageRequest
+import com.serana.app.data.api.ThinkingBlockDto
+import com.serana.app.data.api.ToolCallDto
+import com.serana.app.data.models.Message
+import com.serana.app.data.models.Role
+import com.serana.app.data.models.StreamStatus
+import com.serana.app.data.models.ThinkingBlock
+import com.serana.app.data.models.ToolTrace
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.UUID
+
+data class ChatDebugTimelineEntry(
+    val id: String,
+    val eventType: String,
+    val summary: String,
+    val createdAt: String,
+    val highlights: List<String> = emptyList(),
+    val isFailure: Boolean = false,
+)
+
+data class ChatDebugSummary(
+    val executionMode: String = "direct",
+    val taskTypes: List<String> = emptyList(),
+    val strategies: List<String> = emptyList(),
+    val toolNames: List<String> = emptyList(),
+    val parallelForges: List<Int> = emptyList(),
+    val eventCounts: Map<String, Int> = emptyMap(),
+    val agentIds: List<String> = emptyList(),
+    val failedEventTypes: List<String> = emptyList(),
+    val latestEventAt: String? = null,
+    val totalRecords: Int = 0,
+    val recentTimeline: List<ChatDebugTimelineEntry> = emptyList(),
+)
+
+class ChatViewModel : ViewModel() {
+    private val _messages = MutableStateFlow(
+        listOf(
+            Message(
+                id = "welcome",
+                content = "Hello, I am Serana. The Android client is now connected to the backend.",
+                role = Role.ASSISTANT,
+            ),
+        ),
+    )
+    val messages: StateFlow<List<Message>> = _messages.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _sessions = MutableStateFlow<List<com.serana.app.data.models.ChatSession>>(emptyList())
+    val sessions: StateFlow<List<com.serana.app.data.models.ChatSession>> = _sessions.asStateFlow()
+
+    private val _executionMode = MutableStateFlow("direct")
+    val executionMode: StateFlow<String> = _executionMode.asStateFlow()
+
+    private val _debugSummary = MutableStateFlow(ChatDebugSummary())
+    val debugSummary: StateFlow<ChatDebugSummary> = _debugSummary.asStateFlow()
+
+    private val _deletingSessionIds = MutableStateFlow<Set<String>>(emptySet())
+    val deletingSessionIds: StateFlow<Set<String>> = _deletingSessionIds.asStateFlow()
+
+    private val _isClearingSessions = MutableStateFlow(false)
+    val isClearingSessions: StateFlow<Boolean> = _isClearingSessions.asStateFlow()
+
+    private var currentSessionId: String? = null
+    private val messageUpdateMutex = Mutex()
+
+    private val _currentSessionId = MutableStateFlow<String?>(null)
+    val activeSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
+
+    init {
+        refreshSessions()
+    }
+
+    fun refreshSessions() {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.getChatSessions()
+                }
+                val payload = response.body().orEmpty()
+                if (response.isSuccessful) {
+                    _sessions.value = payload
+                    if (currentSessionId == null && payload.isNotEmpty()) {
+                        loadSession(payload.first().id)
+                    }
+                }
+            } catch (_: Exception) {
+                // Keep the shell resilient on first launch.
+            }
+        }
+    }
+
+    fun loadSession(sessionId: String) {
+        _isLoading.value = true
+        _error.value = null
+        viewModelScope.launch {
+            try {
+                val messagesResponse = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.getMessages(sessionId)
+                }
+                val debugResponse = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.getChatDebug(sessionId)
+                }
+                if (!messagesResponse.isSuccessful || messagesResponse.body() == null) {
+                    throw IllegalStateException("Failed to load chat history")
+                }
+                currentSessionId = sessionId
+                _currentSessionId.value = sessionId
+                _messages.value = messagesResponse.body().orEmpty().map(::mapChatMessage)
+                if (debugResponse.isSuccessful && debugResponse.body() != null) {
+                    applyDebugResponse(debugResponse.body()!!, keepMessages = true)
+                }
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Failed to load chat session"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun startNewChat() {
+        currentSessionId = null
+        _currentSessionId.value = null
+        _executionMode.value = "direct"
+        _debugSummary.value = ChatDebugSummary()
+        _error.value = null
+        _messages.value = newChatMessages()
+    }
+
+    fun sendMessage(content: String) {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return
+
+        _error.value = null
+        val assistantMessageId = "streaming-${UUID.randomUUID()}"
+        _messages.value = _messages.value + Message(
+            id = UUID.randomUUID().toString(),
+            content = trimmed,
+            role = Role.USER,
+        ) + Message(
+            id = assistantMessageId,
+            content = "",
+            role = Role.ASSISTANT,
+            streamStatus = StreamStatus.THINKING,
+        )
+        performAssistantRequest(
+            content = trimmed,
+            assistantMessageId = assistantMessageId,
+        )
+    }
+
+    fun retryAssistantMessage(content: String, assistantMessageId: String) {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return
+
+        _error.value = null
+        _messages.value = _messages.value.map { message ->
+            if (message.id == assistantMessageId) {
+                message.copy(
+                    content = "",
+                    thinkingBlocks = emptyList(),
+                    toolCalls = emptyList(),
+                    streamStatus = StreamStatus.RETRYING,
+                )
+            } else {
+                message
+            }
+        }
+        performAssistantRequest(
+            content = trimmed,
+            assistantMessageId = assistantMessageId,
+        )
+    }
+
+    private fun performAssistantRequest(
+        content: String,
+        assistantMessageId: String,
+    ) {
+        _isLoading.value = true
+        viewModelScope.launch {
+            var completedSessionId: String? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    RetrofitClient.streamChatMessage(
+                        SendMessageRequest(
+                            content = content,
+                            sessionId = currentSessionId,
+                            stream = true,
+                        ),
+                    ) { event ->
+                        when (event) {
+                            is ChatStreamEvent.ThinkingBlock -> appendThinkingBlock(assistantMessageId, event.block)
+                            is ChatStreamEvent.Content -> appendAssistantContent(assistantMessageId, event.chunk)
+                            is ChatStreamEvent.Done -> {
+                                currentSessionId = event.sessionId.ifBlank { currentSessionId }
+                                _currentSessionId.value = currentSessionId
+                                updateStreamStatus(assistantMessageId, StreamStatus.FINALIZED)
+                            }
+                        }
+                    }
+                }
+                completedSessionId = currentSessionId
+            } catch (e: Exception) {
+                fallbackToNonStreaming(
+                    content = content,
+                    assistantMessageId = assistantMessageId,
+                    error = e,
+                )
+            } finally {
+                _isLoading.value = false
+            }
+
+            completedSessionId?.let { sessionId ->
+                viewModelScope.launch {
+                    try {
+                        hydrateAssistantFromDebug(sessionId, assistantMessageId)
+                    } finally {
+                        refreshSessions()
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearError() {
+        _error.value = null
+    }
+
+    fun deleteSession(sessionId: String) {
+        if (_deletingSessionIds.value.contains(sessionId)) return
+
+        viewModelScope.launch {
+            _deletingSessionIds.value = _deletingSessionIds.value + sessionId
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.deleteChatSession(sessionId)
+                }
+                if (!response.isSuccessful || response.body()?.success != true) {
+                    throw IllegalStateException("删除会话失败")
+                }
+
+                val wasCurrent = currentSessionId == sessionId
+                val remainingSessions = _sessions.value.filterNot { it.id == sessionId }
+                _sessions.value = remainingSessions
+
+                if (wasCurrent) {
+                    if (remainingSessions.isNotEmpty()) {
+                        loadSession(remainingSessions.first().id)
+                    } else {
+                        startNewChat()
+                    }
+                }
+            } catch (e: Exception) {
+                _error.value = e.message ?: "删除会话失败"
+            } finally {
+                _deletingSessionIds.value = _deletingSessionIds.value - sessionId
+            }
+        }
+    }
+
+    fun clearAllSessions() {
+        if (_isClearingSessions.value) return
+
+        viewModelScope.launch {
+            _isClearingSessions.value = true
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.clearChatSessions()
+                }
+                if (!response.isSuccessful || response.body()?.success != true) {
+                    throw IllegalStateException("清空会话失败")
+                }
+                _sessions.value = emptyList()
+                startNewChat()
+            } catch (e: Exception) {
+                _error.value = e.message ?: "清空会话失败"
+            } finally {
+                _isClearingSessions.value = false
+            }
+        }
+    }
+
+    private suspend fun fallbackToNonStreaming(
+        content: String,
+        assistantMessageId: String,
+        error: Exception,
+    ) {
+        try {
+            val response = withContext(Dispatchers.IO) {
+                RetrofitClient.apiService.sendMessage(
+                    SendMessageRequest(
+                        content = content,
+                        sessionId = currentSessionId,
+                        stream = false,
+                    ),
+                )
+            }
+            val payload = response.body()
+            if (!response.isSuccessful || payload == null) {
+                throw IllegalStateException("Chat request failed: ${response.code()}")
+            }
+            currentSessionId = payload.sessionId
+            _currentSessionId.value = payload.sessionId
+            replaceAssistantMessage(assistantMessageId, mapChatMessage(payload.assistantMessage))
+            _executionMode.value = payload.executionMode
+            _debugSummary.value = buildDebugSummary(
+                executionMode = payload.executionMode,
+                insights = null,
+                completion = payload,
+            )
+            refreshSessions()
+        } catch (fallbackError: Exception) {
+            _error.value = fallbackError.message ?: error.message ?: "Unknown error"
+            replaceAssistantMessage(
+                assistantMessageId,
+                Message(
+                    id = assistantMessageId,
+                    content = "Streaming failed and the fallback request also failed.",
+                    role = Role.ASSISTANT,
+                    streamStatus = StreamStatus.FAILED,
+                ),
+            )
+        }
+    }
+
+    private fun applyDebugResponse(debug: ChatDebugResponseDto, keepMessages: Boolean) {
+        if (!keepMessages) {
+            _messages.value = debug.messages.map(::mapChatMessage)
+        }
+        _executionMode.value = debug.auditSummary.executionModes.firstOrNull() ?: "direct"
+        _debugSummary.value = buildDebugSummary(
+            executionMode = _executionMode.value,
+            insights = debug.auditSummary,
+            completion = null,
+            totalRecords = debug.auditTimeline.totalRecords,
+            timelineEntries = debug.auditTimeline.records.map(::mapAuditRecord).takeLast(6).reversed(),
+        )
+    }
+
+    private fun buildDebugSummary(
+        executionMode: String,
+        insights: AuditInsightsDto?,
+        completion: ChatCompletionResponseDto?,
+        totalRecords: Int = 0,
+        timelineEntries: List<ChatDebugTimelineEntry> = emptyList(),
+    ): ChatDebugSummary {
+        val toolNames = insights?.toolNames ?: completion?.auditRecords?.map { it.eventType }.orEmpty()
+        val recentTimeline = if (timelineEntries.isNotEmpty()) {
+            timelineEntries
+        } else {
+            completion?.auditRecords
+                ?.map(::mapAuditRecord)
+                ?.takeLast(5)
+                ?.reversed()
+                .orEmpty()
+        }
+        return ChatDebugSummary(
+            executionMode = executionMode,
+            taskTypes = insights?.taskTypes.orEmpty(),
+            strategies = insights?.strategies.orEmpty(),
+            toolNames = toolNames,
+            parallelForges = insights?.parallelForges.orEmpty(),
+            eventCounts = insights?.eventCounts.orEmpty(),
+            agentIds = insights?.agentIds.orEmpty(),
+            failedEventTypes = insights?.failedEventTypes.orEmpty(),
+            latestEventAt = insights?.latestEventAt,
+            totalRecords = totalRecords.takeIf { it > 0 } ?: recentTimeline.size,
+            recentTimeline = recentTimeline,
+        )
+    }
+
+    private fun appendAssistantContent(messageId: String, chunk: String) {
+        if (chunk.isEmpty()) return
+        viewModelScope.launch {
+            messageUpdateMutex.withLock {
+                _messages.value = _messages.value.map { message ->
+                    if (message.id == messageId) {
+                        message.copy(content = message.content + chunk)
+                            .withStreamStatus(StreamStatus.STREAMING)
+                    } else {
+                        message
+                    }
+                }
+            }
+        }
+    }
+
+    private fun appendThinkingBlock(messageId: String, block: ThinkingBlockDto) {
+        viewModelScope.launch {
+            messageUpdateMutex.withLock {
+                _messages.value = _messages.value.map { message ->
+                    if (message.id == messageId) {
+                        message.copy(
+                            thinkingBlocks = message.thinkingBlocks + mapThinkingBlock(block),
+                        ).withStreamStatus(StreamStatus.THINKING)
+                    } else {
+                        message
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun hydrateAssistantFromDebug(sessionId: String, messageId: String) {
+        val debugResponse = withContext(Dispatchers.IO) {
+            RetrofitClient.apiService.getChatDebug(sessionId)
+        }
+        val debug = debugResponse.body()
+        if (!debugResponse.isSuccessful || debug == null) {
+            return
+        }
+        val latestAssistant = debug.messages.lastOrNull { it.role.equals("assistant", ignoreCase = true) }
+        if (latestAssistant != null) {
+            replaceAssistantMessage(messageId, mapChatMessage(latestAssistant))
+            updateStreamStatus(messageId, StreamStatus.FINALIZED)
+        }
+        applyDebugResponse(debug, keepMessages = true)
+    }
+
+    private fun replaceAssistantMessage(messageId: String, replacement: Message) {
+        _messages.value = _messages.value.map { message ->
+            if (message.id == messageId) replacement else message
+        }
+    }
+
+    private fun updateStreamStatus(messageId: String, status: StreamStatus) {
+        _messages.value = _messages.value.map { message ->
+            if (message.id == messageId) {
+                message.copy(streamStatus = status)
+            } else {
+                message
+            }
+        }
+    }
+}
+
+private fun newChatMessages(): List<Message> {
+    return listOf(
+        Message(
+            id = "welcome-${UUID.randomUUID()}",
+            content = "新的对话已准备好，随时告诉 Serana 你想做什么。",
+            role = Role.ASSISTANT,
+        ),
+    )
+}
+
+private fun mapChatMessage(dto: ChatMessageDto): Message {
+    return Message(
+        id = dto.id,
+        content = dto.content,
+        role = if (dto.role.equals("user", ignoreCase = true)) Role.USER else Role.ASSISTANT,
+        timestamp = dto.timestamp,
+        thinkingBlocks = dto.thinkingBlocks.orEmpty().map(::mapThinkingBlock),
+        toolCalls = dto.toolCalls.orEmpty().map(::mapToolCall),
+        streamStatus = StreamStatus.FINALIZED,
+    )
+}
+
+private fun mapThinkingBlock(dto: ThinkingBlockDto): ThinkingBlock {
+    return ThinkingBlock(
+        id = dto.id,
+        title = dto.title,
+        content = dto.content,
+    )
+}
+
+private fun Message.withStreamStatus(status: StreamStatus): Message {
+    return copy(streamStatus = status)
+}
+
+private fun mapToolCall(dto: ToolCallDto): ToolTrace {
+    return ToolTrace(
+        id = dto.id,
+        name = dto.name,
+        status = dto.status,
+        timestamp = dto.timestamp,
+        input = dto.input,
+        output = dto.output,
+    )
+}
+
+private fun mapAuditRecord(dto: com.serana.app.data.api.AuditRecordDto): ChatDebugTimelineEntry {
+    return ChatDebugTimelineEntry(
+        id = dto.id,
+        eventType = dto.eventType,
+        summary = dto.summary,
+        createdAt = dto.createdAt,
+        highlights = extractAuditHighlights(dto.payload),
+        isFailure = dto.eventType.contains("fail", ignoreCase = true) ||
+            ((dto.payload?.get("status") as? String)?.contains("fail", ignoreCase = true) == true),
+    )
+}
+
+private fun extractAuditHighlights(payload: Map<String, Any?>?): List<String> {
+    if (payload.isNullOrEmpty()) return emptyList()
+
+    val entries = linkedMapOf<String, Any?>()
+
+    fun capture(source: Map<String, Any?>?) {
+        if (source == null) return
+        listOf(
+            "task_type",
+            "strategy",
+            "tool_name",
+            "agent_id",
+            "execution_mode",
+            "status",
+            "retry_limit",
+            "batch_size",
+            "batch_count",
+            "parallel_forges",
+            "parallel_slots",
+        ).forEach { key ->
+            if (source.containsKey(key) && entries[key] == null) {
+                entries[key] = source[key]
+            }
+        }
+    }
+
+    capture(payload)
+    capture(anyToStringMap(payload["input"]))
+    capture(anyToStringMap(payload["output"]))
+
+    return entries.entries.mapNotNull { (key, value) ->
+        val normalized = when (value) {
+            null -> return@mapNotNull null
+            is Collection<*> -> value.joinToString()
+            is Array<*> -> value.joinToString()
+            else -> value.toString()
+        }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+
+        "${key.replace('_', ' ')}: $normalized"
+    }
+}
+
+private fun anyToStringMap(value: Any?): Map<String, Any?>? {
+    val raw = value as? Map<*, *> ?: return null
+    return raw.entries
+        .mapNotNull { (key, entryValue) ->
+            (key as? String)?.let { it to entryValue }
+        }
+        .toMap()
+}

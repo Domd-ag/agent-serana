@@ -1,0 +1,62 @@
+{
+  "name": "calculator",
+  "version": "1.0.0",
+  "description": "本地计算工具包，提供基础四则运算。",
+  "author": "Serana Team",
+  "format": "sebastian_package",
+  "runtime": "python",
+  "instruction_file": "SKILL.md",
+  "entrypoint": "__init__.py",
+  "agent_type": "all",
+  "max_instances": 5,
+  "tools": [
+    {
+      "name": "add",
+      "description": "计算两个数字的和。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "第一个数字。" },
+          "b": { "type": "number", "description": "第二个数字。" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "subtract",
+      "description": "用第一个数字减去第二个数字。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "第一个数字。" },
+          "b": { "type": "number", "description": "第二个数字。" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "multiply",
+      "description": "计算两个数字的乘积。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "第一个数字。" },
+          "b": { "type": "number", "description": "第二个数字。" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "divide",
+      "description": "用第一个数字除以第二个数字。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "被除数。" },
+          "b": { "type": "number", "description": "除数。" }
+        },
+        "required": ["a", "b"]
+      }
+    }
+  ]
+}

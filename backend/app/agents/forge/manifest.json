@@ -1,0 +1,50 @@
+{
+  "name": "Forge",
+  "display_name": "工人代理",
+  "description": "负责执行具体任务的工人代理",
+  "version": "1.0.0",
+  "agent_type": "worker",
+  "max_instances": 5,
+  "skills": [
+    {
+      "id": "task_execution",
+      "name": "任务执行",
+      "description": "执行具体的任务",
+      "enabled": true
+    },
+    {
+      "id": "tool_calling",
+      "name": "工具调用",
+      "description": "调用各种工具完成工作",
+      "enabled": true
+    },
+    {
+      "id": "file_operations",
+      "name": "文件操作",
+      "description": "读写和操作文件",
+      "enabled": true
+    }
+  ],
+  "tools": [
+    {
+      "id": "web_search",
+      "name": "网页搜索",
+      "description": "在互联网上搜索信息"
+    },
+    {
+      "id": "file_reader",
+      "name": "文件读取",
+      "description": "读取文件内容"
+    },
+    {
+      "id": "file_writer",
+      "name": "文件写入",
+      "description": "写入文件内容"
+    },
+    {
+      "id": "browser_tool",
+      "name": "浏览器工具",
+      "description": "使用浏览器执行操作"
+    }
+  ]
+}
