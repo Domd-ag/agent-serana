@@ -1,78 +1,28 @@
-# Backend App Module
+# app 目录说明
 
-This directory contains the main application code for the Serana backend.
+这里是后端应用主目录，把 API、Agent、Memory、Skills、Approvals 和基础设施组织成一个可运行的 Serana 服务。
 
-## Structure
+## 目录结构
 
 ```text
 app/
-+-- __init__.py
 +-- main.py
-+-- api/
-+-- agents/
-+-- core/
-+-- memory/
-+-- skills/
++-- api/         HTTP 路由层
++-- agents/      Serana / Aide / Forge 的执行与编排
++-- approvals/   PolicyGate、reviewer、approval manager、审批服务
++-- core/        数据库、schema、日志、LLM、artifact、审计
++-- memory/      resident / working / dynamic memory
++-- skills/      本地 skill 管理与 ClawHub 对接
 ```
 
-## Responsibilities
+## 当前重点
 
-### `main.py`
+- 聊天流里已经支持审批事件回推
+- 浏览器动作、远程技能安装、本地技能导入、可卸载技能删除都走统一审批链路
+- `skills_store` 现在区分 bundled / installed / staging 三类目录
 
-- creates the FastAPI application
-- configures middleware and logging
-- registers routers and exception handlers
-- initializes the database on startup
+## 维护约定
 
-### `api/`
-
-Contains route handlers for the public HTTP surface. See [api/README.md](api/README.md).
-
-### `agents/`
-
-Contains the runtime for `Serana`, `Aide`, and `Forge`, including pooling rules and orchestration logic. See [agents/README.md](agents/README.md).
-
-### `core/`
-
-Contains shared infrastructure such as configuration, models, schemas, database access, security helpers, logging, and audit utilities. See [core/README.md](core/README.md).
-
-### `memory/`
-
-Contains memory storage, retrieval, and prompt injection utilities used by chat and goal planning.
-
-### `skills/`
-
-Contains skill-package models, loading, validation, and runtime management.
-
-## Main Runtime Flows
-
-### Chat
-
-1. receive a user message
-2. load or create a chat session
-3. inject memory context
-4. route through `Serana`
-5. persist the response and traces
-6. expose audit and debug views
-
-### Goals
-
-1. create a goal
-2. plan subtasks through `Serana`
-3. store planning summary and trace data
-4. start and update subtask execution state
-5. record events and audit records
-
-## Conventions
-
-- API routes live under `/api/v1`
-- shared request and response models live in `core/schemas.py`
-- ORM models live in `core/models.py`
-- route modules should stay thin and push orchestration into shared services or agent modules
-
-## Related Docs
-
-- [Backend Guide](../README.md)
-- [API Module Guide](api/README.md)
-- [Core Module Guide](core/README.md)
-- [Agent System Guide](agents/README.md)
+- 涉及聊天执行链，先看 `agents/serana/README.md` 和 `api/README.md`
+- 涉及审批或高风险动作，先看 `approvals/README.md`
+- 涉及技能生命周期，先看 `skills/README.md` 和 `skills_store/README.md`

@@ -1,193 +1,40 @@
-# Serana Agent System
+# agents 目录
 
-This module implements the three-layer agent runtime used by the backend:
+这里实现 Serana 后端的多 agent 运行时：Serana 是主 Butler，Aide 是协调层，Forge 是执行层。
 
-- `Serana`: chief agent
-- `Aide`: team lead agent
-- `Forge`: worker agent
-
-## Directory Layout
+## 目录结构
 
 ```text
 agents/
 +-- __init__.py
-+-- base.py
-+-- agent_limits.json
-+-- README.md
-+-- serana/
-|   +-- __init__.py
-|   +-- graph.py
-|   +-- nodes.py
-|   +-- serana.py
-+-- aide/
-|   +-- __init__.py
-|   +-- aide.py
-|   +-- manifest.json
-+-- forge/
-    +-- __init__.py
-    +-- forge.py
-    +-- manifest.json
++-- agent_limits.json  agent 实例上限配置
++-- base.py            AgentManager、manifest、状态模型和池化逻辑
++-- aide/              Aide 协调 agent
++-- forge/             Forge 执行 agent
++-- serana/            Serana 主 agent
 ```
 
-## Agent Roles
+## 职责划分
 
-### Serana
+- `serana/`：理解用户请求、构建上下文、选择直接回复/工具调用/委派执行，并生成最终回复。
+- `aide/`：对复杂任务做批次规划、重试协调和 Forge 分发。
+- `forge/`：执行具体子任务，并按任务类型选择执行策略。
+- `base.py`：读取 manifest、应用 `agent_limits.json`、维护 agent 池和状态。
 
-- Path: `serana/`
-- Responsibility: analyze requests, decide direct vs delegated execution, coordinate planning, and summarize results
-- Implementation: singleton
-- Effective instance limit: `1`
+## 运行方式
 
-### Aide
+1. `Serana` 先进行 lightweight route，尽量用一次 LLM 判断直接回复、工具调用或委派。
+2. 简单请求走直接回复或本地 tool。
+3. 复杂请求进入 Serana planning loop，必要时分解给 Aide 和 Forge。
+4. 所有关键阶段写入 thinking blocks、tool calls 和 audit traces。
 
-- Path: `aide/`
-- Responsibility: classify delegated work, plan batches, coordinate retries, and hand work to `Forge`
-- Effective instance limit: `3`
+## Loop 化进展
 
-### Forge
+- Serana 的重链路 planning flow 已放到 `serana/loop.py`，由 ConversationLoop 执行 analyze/decompose/delegate/summarize。
+- Aide/Forge 委派现在会作为 `serana_loop_action` 记录 started/completed。
+- 阶段 trace 统一使用 `serana_planning_stage`，旧的 graph 入口和审计字段已经移除。
+- 子代理委派会记录 `serana_agent_lifecycle`，并把 Aide、Forge、delegate 汇总写成统一 `tool_result`。
 
-- Path: `forge/`
-- Responsibility: execute concrete delegated tasks and choose execution strategy by task type
-- Effective instance limit: `5`
+## 维护约定
 
-## Runtime Behavior
-
-### Complexity Routing
-
-`Serana` decides whether a request should stay local or be delegated.
-
-- `direct`: `Serana` handles the request itself
-- `delegated`: `Serana` decomposes the request and hands work to `Aide` and `Forge`
-
-This routing is shared by both chat execution and goal planning flows.
-
-### Delegation Flow
-
-The delegated path follows this structure:
-
-1. `Serana` analyzes the request
-2. `Serana` creates subtasks
-3. `Serana` builds a delegation plan
-4. `Aide` instances coordinate batches of delegated work
-5. `Forge` instances execute concrete task batches
-6. `Serana` summarizes the result
-
-### Parallel Execution
-
-Delegated subtasks are not handled purely one by one anymore. The current runtime supports:
-
-- dynamic delegation planning
-- pooled `Aide` reuse
-- pooled `Forge` reuse
-- parallel subtask dispatch with slot limits
-
-The effective concurrency is shaped by:
-
-- task complexity
-- inferred task type
-- number of subtasks
-- configured `Aide` and `Forge` limits
-
-### Task-Type Behavior
-
-`Aide` and `Forge` now have distinct responsibilities:
-
-- `Aide` handles classification, batching, and retry coordination
-- `Forge` handles task-type strategy selection and concrete execution
-
-Common task-type families include:
-
-- `research`
-- `planning`
-- `analysis`
-- `build`
-- `question`
-- `general`
-
-## Instance Limits
-
-Agent instance limits are centrally configured in [agent_limits.json](/D:/agent-serana/backend/app/agents/agent_limits.json:1):
-
-```json
-{
-  "serana": 1,
-  "aide": 3,
-  "forge": 5
-}
-```
-
-Notes:
-
-- `Serana` is enforced as a singleton in code, so its effective limit is always `1`.
-- `Aide` and `Forge` still keep `max_instances` in their `manifest.json` files, but runtime loading overrides those values with `agent_limits.json`.
-
-## Manifest Files
-
-`Aide` and `Forge` each have a `manifest.json` file for descriptive metadata, skills, and tools.
-
-Example shape:
-
-```json
-{
-  "name": "Aide",
-  "display_name": "Aide",
-  "description": "Team lead agent",
-  "version": "1.0.0",
-  "agent_type": "team_lead",
-  "max_instances": 3,
-  "skills": [],
-  "tools": []
-}
-```
-
-At runtime, `base.py` loads the manifest and then applies any matching override from `agent_limits.json`.
-
-## How AgentManager Works
-
-`AgentManager` is responsible for:
-
-- loading agent manifests
-- applying configured instance limits
-- creating `Aide` and `Forge` instances on demand
-- reserving idle pooled agents before reuse in concurrent flows
-- reusing idle pooled instances when available
-- returning the singleton `Serana` instance
-
-In practice:
-
-- `Serana` remains a singleton
-- `Aide` instances are pooled and return to `idle` after work finishes
-- `Forge` instances are pooled and return to `idle` after work finishes
-
-## Audit and Debug Integration
-
-Agent execution is reflected in the unified backend audit model.
-
-Current traces include:
-
-- `serana_analyze`
-- `serana_decompose`
-- `serana_delegate`
-- `serana_summarize`
-- `aide_execute`
-- `forge_execute`
-
-These records feed:
-
-- entity audit endpoints
-- timeline aggregation
-- debug-summary views
-- goal and chat debug endpoints
-
-## Configuration Changes
-
-When changing agent counts:
-
-1. Update `agent_limits.json`
-2. Keep manifest values aligned for readability
-3. Do not increase `serana` above `1` unless the singleton implementation is changed
-
-When changing skills or tools:
-
-1. Update the corresponding `manifest.json`
-2. Update the agent implementation if behavior also changes
+调整 agent 数量先改 `agent_limits.json`；调整某个 agent 的行为先进入对应子目录。新增 agent 类型时同步更新本 README、`base.py` 和 API 暴露逻辑。

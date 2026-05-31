@@ -78,10 +78,14 @@ class AuditInsightsResponse(BaseModel):
     task_types: List[str] = Field(default_factory=list)
     strategies: List[str] = Field(default_factory=list)
     tool_names: List[str] = Field(default_factory=list)
+    tool_result_names: List[str] = Field(default_factory=list)
+    tool_result_statuses: List[str] = Field(default_factory=list)
+    tool_result_schema_versions: List[str] = Field(default_factory=list)
+    artifact_kinds: List[str] = Field(default_factory=list)
     loop_stages: List[str] = Field(default_factory=list)
     lightweight_routes: List[str] = Field(default_factory=list)
     loop_transition_targets: List[str] = Field(default_factory=list)
-    graph_stages: List[str] = Field(default_factory=list)
+    planning_stages: List[str] = Field(default_factory=list)
     execution_modes: List[str] = Field(default_factory=list)
     retry_limits: List[int] = Field(default_factory=list)
     batch_sizes: List[int] = Field(default_factory=list)
@@ -198,6 +202,21 @@ class ChatMessageRequest(BaseModel):
     stream: bool = True
 
 
+class ToolResult(BaseModel):
+    schema_version: str = "serana.tool_result.v1"
+    result_type: str = "tool"
+    tool_name: str
+    skill: str
+    tool: str
+    input: Dict[str, Any]
+    output: Dict[str, Any]
+    status: str
+    user_summary: str = ""
+    artifact: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: str
+
+
 class ToolCall(BaseModel):
     id: str
     name: str
@@ -259,14 +278,30 @@ class AgentStatusResponse(BaseModel):
 
 class ApprovalRequest(BaseModel):
     request_id: str
+    source: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    session_id: Optional[str] = None
+    tool_name: Optional[str] = None
     operation: str
     risk_level: str
-    details: Dict[str, Any]
+    title: str
+    summary: str
+    reason: Optional[str] = None
+    approval_options: List[str] = Field(default_factory=lambda: ["once", "deny"])
+    details: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "pending"
+    created_at: datetime
+    expires_at: Optional[datetime] = None
 
 
 class ApprovalResponse(BaseModel):
     request_id: str
     approved: bool
+    reviewer: str = "user"
+    note: Optional[str] = None
+    approval_scope: str = "once"
+    resolved_at: Optional[datetime] = None
 
 
 class HealthResponse(BaseModel):

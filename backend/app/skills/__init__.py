@@ -4,12 +4,17 @@ from app.skills.loader import SkillLoader
 from app.skills.models import (
     MarketplaceCatalogResponse,
     MarketplaceInstallRequest,
+    MarketplaceInstallResponse,
     MarketplaceOwner,
     MarketplaceSearchResponse,
     MarketplaceSkillDetail,
     MarketplaceSkillSummary,
+    SkillLifecycleStatus,
     SkillPackage,
+    SkillMutationResponse,
+    SkillScopeUpdateRequest,
     SkillTool,
+    SkillUpdateRequest,
 )
 
 __all__ = [
@@ -23,5 +28,10 @@ __all__ = [
     "MarketplaceSkillDetail",
     "MarketplaceCatalogResponse",
     "MarketplaceInstallRequest",
+    "MarketplaceInstallResponse",
+    "SkillMutationResponse",
+    "SkillLifecycleStatus",
+    "SkillScopeUpdateRequest",
+    "SkillUpdateRequest",
 ]
 

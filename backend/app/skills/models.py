@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.schemas import ApprovalRequest
+
 
 class SkillToolInputSchema(BaseModel):
     type: str = "object"
@@ -48,6 +50,16 @@ class SkillPackage(BaseModel):
     is_enabled: bool = True
     is_installed: bool = True
     installed_at: Optional[datetime] = None
+    origin: str = "bundled"
+    can_uninstall: bool = False
+    registry_slug: Optional[str] = None
+    source_url: Optional[str] = None
+    source_label: str = "项目内置"
+    trust_state: str = "trusted"
+    effective_scope: str = "forge"
+    can_update: bool = False
+    latest_version: Optional[str] = None
+    update_available: bool = False
     manifest: SkillPackageManifest
     instruction_content: Optional[str] = None
     path: Optional[str] = None
@@ -125,3 +137,42 @@ class MarketplaceInstallRequest(BaseModel):
     slug: str
     version: Optional[str] = None
     tag: Optional[str] = None
+    approval_request_id: Optional[str] = None
+
+
+class MarketplaceInstallResponse(BaseModel):
+    status: str
+    skill: Optional[SkillPackage] = None
+    approval_request: Optional[ApprovalRequest] = None
+    message: Optional[str] = None
+
+
+class SkillMutationResponse(BaseModel):
+    status: str
+    skill: Optional[SkillPackage] = None
+    approval_request: Optional[ApprovalRequest] = None
+    message: Optional[str] = None
+
+
+class SkillLifecycleStatus(BaseModel):
+    skill_name: str
+    installed_version: str
+    latest_version: Optional[str] = None
+    update_available: bool = False
+    can_update: bool = False
+    can_uninstall: bool = False
+    source_label: str
+    source_url: Optional[str] = None
+    trust_state: str
+    effective_scope: str
+    registry_slug: Optional[str] = None
+
+
+class SkillUpdateRequest(BaseModel):
+    version: Optional[str] = None
+    tag: Optional[str] = None
+    approval_request_id: Optional[str] = None
+
+
+class SkillScopeUpdateRequest(BaseModel):
+    agent_type: str

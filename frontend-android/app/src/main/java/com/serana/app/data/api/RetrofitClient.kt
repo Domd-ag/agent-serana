@@ -25,6 +25,10 @@ object RetrofitClient {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val streamingClient = client.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
     private val retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)
         .client(client)
@@ -32,6 +36,20 @@ object RetrofitClient {
         .build()
 
     val apiService: ApiService = retrofit.create(ApiService::class.java)
+
+    fun resolveApiUrl(pathOrUrl: String): String {
+        if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+            return pathOrUrl
+        }
+        val normalizedPath = pathOrUrl.removePrefix("/")
+        val apiRoot = BASE_URL.removeSuffix("/")
+        return if (normalizedPath.startsWith("api/v1/")) {
+            val serverRoot = apiRoot.removeSuffix("api/v1")
+            "$serverRoot$normalizedPath"
+        } else {
+            "$apiRoot/$normalizedPath"
+        }
+    }
 
     fun streamChatMessage(
         request: SendMessageRequest,
@@ -43,7 +61,7 @@ object RetrofitClient {
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
-        client.newCall(httpRequest).execute().use { response ->
+        streamingClient.newCall(httpRequest).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IllegalStateException("Streaming request failed: ${response.code}")
             }
@@ -63,13 +81,27 @@ object RetrofitClient {
                     "content" -> {
                         onEvent(ChatStreamEvent.Content((event.content as? String).orEmpty()))
                     }
+                    "approval_requested" -> {
+                        val approvalRequest = gson.fromJson(gson.toJsonTree(event.content), ApprovalRequestDto::class.java)
+                        onEvent(ChatStreamEvent.ApprovalRequested(approvalRequest))
+                    }
+                    "approval_resolved" -> {
+                        val decision = gson.fromJson(gson.toJsonTree(event.content), ApprovalResponseDto::class.java)
+                        onEvent(ChatStreamEvent.ApprovalResolved(decision))
+                    }
                     "done" -> {
-                        val sessionId = if (event.content is Map<*, *>) {
+                        val fallbackSessionId = if (event.content is Map<*, *>) {
                             event.content["session_id"]?.toString().orEmpty()
                         } else {
-                            event.sessionId.orEmpty()
+                            ""
                         }
-                        onEvent(ChatStreamEvent.Done(sessionId))
+                        onEvent(
+                            ChatStreamEvent.Done(
+                                sessionId = event.sessionId?.takeIf { it.isNotBlank() } ?: fallbackSessionId,
+                                thinkingBlocks = event.thinkingBlocks.orEmpty(),
+                                toolCalls = event.toolCalls.orEmpty(),
+                            )
+                        )
                     }
                 }
             }
@@ -80,14 +112,28 @@ object RetrofitClient {
 sealed interface ChatStreamEvent {
     data class ThinkingBlock(val block: ThinkingBlockDto) : ChatStreamEvent
     data class Content(val chunk: String) : ChatStreamEvent
-    data class Done(val sessionId: String) : ChatStreamEvent
+    data class ApprovalRequested(val request: ApprovalRequestDto) : ChatStreamEvent
+    data class ApprovalResolved(val response: ApprovalResponseDto) : ChatStreamEvent
+    data class Done(
+        val sessionId: String,
+        val thinkingBlocks: List<ThinkingBlockDto> = emptyList(),
+        val toolCalls: List<ToolCallDto> = emptyList(),
+    ) : ChatStreamEvent
 }
 
 private data class StreamEnvelope(
     val type: String,
     val content: Any? = null,
     val session_id: String? = null,
+    val thinking_blocks: List<ThinkingBlockDto>? = null,
+    val tool_calls: List<ToolCallDto>? = null,
 ) {
     val sessionId: String?
         get() = session_id
+
+    val thinkingBlocks: List<ThinkingBlockDto>?
+        get() = thinking_blocks
+
+    val toolCalls: List<ToolCallDto>?
+        get() = tool_calls
 }

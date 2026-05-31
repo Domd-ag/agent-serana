@@ -1,15 +1,21 @@
 import json
+from pathlib import Path
+import shutil
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+import zipfile
 
 import httpx
 
 from app.agents.aide import AideAgent
+from app.approvals import get_approval_manager, get_policy_gate
 from app.agents.base import AgentManager
-from app.agents.serana.context import build_contextual_request
+from app.agents.serana.context import build_contextual_request, build_serana_context_bundle
 from app.agents.forge import ForgeAgent
 from app.agents.serana import SeranaAgent
+from app.agents.serana.nodes import analyze_node, decompose_node, delegate_node, summarize_node, try_lightweight_conversation
 from app.api.skills import get_marketplace_client
 from app.core.database import AsyncSessionLocal
 from app.core.init_db import create_default_user, init_db
@@ -449,6 +455,192 @@ class CountingLLM(CleanFakeLLM):
         return await super().ainvoke(messages)
 
 
+class UnsupportedToolRouteLLM(CleanFakeLLM):
+    async def ainvoke(self, messages):
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "calendar.create_event",
+                        "arguments": {"title": "Test"},
+                        "reason": "Unsupported external tool",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return await super().ainvoke(messages)
+
+
+class BrowserRouteLLM(CleanFakeLLM):
+    def __init__(self):
+        self.call_count = 0
+
+    async def ainvoke(self, messages):
+        self.call_count += 1
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "browser.search_web",
+                        "arguments": {"query": "Serana browser test", "max_results": 3},
+                        "reason": "Current web search",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if "summarizing browser tool output" in system_prompt:
+            return FakeResponse("我查到了浏览器结果：Serana browser test 的第一条结果可用。")
+        return await super().ainvoke(messages)
+
+
+class BrowserCaptureRouteLLM(CleanFakeLLM):
+    async def ainvoke(self, messages):
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "browser.capture_page",
+                        "arguments": {"full_page": True},
+                        "reason": "Browser screenshot request",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if "summarizing browser tool output" in system_prompt:
+            return FakeResponse("当前网页截图已经保存好了。")
+        return await super().ainvoke(messages)
+
+
+class BrowserLookRouteLLM(CleanFakeLLM):
+    def __init__(self):
+        self.summary_content = None
+
+    async def ainvoke(self, messages):
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "browser.look_page",
+                        "arguments": {"full_page": False},
+                        "reason": "Browser visual inspection",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if "summarizing browser tool output" in system_prompt:
+            self.summary_content = messages[-1].content
+            return FakeResponse("当前网页视觉快照看起来正常。")
+        return await super().ainvoke(messages)
+
+
+class BrowserPreviewRouteLLM(CleanFakeLLM):
+    async def ainvoke(self, messages):
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "browser.create_html_preview",
+                        "arguments": {
+                            "title": "Bubble Sort Demo",
+                            "html": "<section><h1>Bubble Sort Demo</h1><p>Preparing an interactive sorting demo.</p></section>",
+                        },
+                        "reason": "Interactive local demo preview",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if "You generate a single self-contained HTML document for Serana's in-app preview surface." in system_prompt:
+            return FakeResponse(
+                """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bubble Sort Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f7f7f4; color: #1f2b21; }
+    .panel { max-width: 720px; margin: 0 auto; }
+    #bars { display: flex; align-items: flex-end; gap: 8px; height: 220px; margin: 20px 0; }
+    .bar { flex: 1; background: #48a878; border-radius: 10px 10px 4px 4px; color: white; text-align: center; font-size: 12px; padding-top: 6px; box-sizing: border-box; transition: height .2s ease, opacity .2s ease; }
+    button { border: 0; border-radius: 999px; padding: 10px 14px; background: #2f7d57; color: white; font-weight: 700; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>冒泡排序演示</h1>
+    <p id="status">点击按钮后，数字会按从小到大重新排列。</p>
+    <div id="bars"></div>
+    <button id="start" type="button">开始排序</button>
+  </main>
+  <script>
+    const values = [7, 3, 9, 4, 1, 8];
+    const bars = document.getElementById("bars");
+    const status = document.getElementById("status");
+    function render(activeIndex = -1) {
+      bars.innerHTML = values.map((value, index) => `<div class="bar" style="height:${value * 18}px;opacity:${index === activeIndex ? 0.72 : 1}">${value}</div>`).join("");
+    }
+    document.getElementById("start").addEventListener("click", () => {
+      values.sort((a, b) => a - b);
+      status.textContent = "排序完成，数字已经按从小到大排列。";
+      render(0);
+    });
+    render();
+  </script>
+</body>
+</html>"""
+            )
+        if "summarizing browser tool output" in system_prompt:
+            return FakeResponse("我已经生成了一个可打开的冒泡排序演示页面。")
+        return await super().ainvoke(messages)
+
+
+class BrowserActRouteLLM(CleanFakeLLM):
+    async def ainvoke(self, messages):
+        system_prompt = messages[0].content
+        if "You triage a personal butler request." in system_prompt:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "route": "direct_tool",
+                        "tool_name": "browser.act_page",
+                        "arguments": {
+                            "action": "click",
+                            "target": "下载按钮",
+                        },
+                        "reason": "Browser action request",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if "summarizing browser tool output" in system_prompt:
+            return FakeResponse("我已经按你的确认执行了浏览器操作。")
+        return await super().ainvoke(messages)
+
+
+class BrowserGateway:
+    def __init__(self):
+        self.llm = BrowserRouteLLM()
+
+    def get_llm(self, user_config=None, use_backend_default=False):
+        return self.llm
+
+
+class BrowserActGateway:
+    def get_llm(self, user_config=None, use_backend_default=False):
+        return BrowserActRouteLLM()
+
+
 class FakeMarketplaceClient:
     def search_skills(self, query: str, manager: SkillManager, limit: int = 20):
         return MarketplaceSearchResponse(
@@ -489,6 +681,42 @@ class FakeMarketplaceClient:
         return manager.get_skill("weather")
 
 
+def create_test_skill_archive(skill_name: str, version: str = "0.1.0") -> tuple[Path, bytes]:
+    temp_dir = Path(tempfile.mkdtemp())
+    skill_dir = temp_dir / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.json").write_text(
+        json.dumps(
+            {
+                "name": skill_name,
+                "version": version,
+                "description": f"Test skill {skill_name}",
+                "author": "Test Suite",
+                "format": "sebastian_package",
+                "runtime": "instruction",
+                "instruction_file": "SKILL.md",
+                "entrypoint": None,
+                "agent_type": "all",
+                "max_instances": 1,
+                "tools": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        f"# {skill_name}\n\nThis is a temporary test skill.\n",
+        encoding="utf-8",
+    )
+
+    archive_path = temp_dir / f"{skill_name}.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for file_path in skill_dir.rglob("*"):
+            archive.write(file_path, file_path.relative_to(temp_dir))
+
+    return temp_dir, archive_path.read_bytes()
+
+
 class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await init_db()
@@ -499,6 +727,7 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test")
 
     async def asyncTearDown(self):
+        await get_approval_manager().shutdown()
         await self.client.aclose()
         app.dependency_overrides.clear()
 
@@ -572,6 +801,8 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
                 events.append(json.loads(line[6:]))
 
         self.assertGreaterEqual(len(events), 2)
+        event_types = [event["type"] for event in events]
+        self.assertIn("thinking", event_types)
         content_events = [event for event in events if event["type"] == "content"]
         self.assertGreater(len(content_events), 0)
 
@@ -585,6 +816,114 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("serana_loop_stage", tool_names)
         self.assertIn("conversation_route", tool_names)
         self.assertIn("serana_direct_reply", tool_names)
+
+    async def test_chat_stream_supports_interactive_approval_for_browser_actions(self):
+        async def fake_browser_action(**kwargs):
+            return {
+                "summary": f"Executed browser action: {kwargs['action']} -> {kwargs['target']}",
+                "status": "completed",
+            }
+
+        agent = SeranaAgent(BrowserActRouteLLM())
+
+        with patch.object(SkillManager, "get_tool_function", return_value=fake_browser_action):
+            events = []
+            async for event in agent.execute_stream("点击当前页面的下载按钮"):
+                events.append(event)
+                if event["type"] == "approval_requested":
+                    request_id = event["content"]["request_id"]
+                    self.assertEqual(event["content"]["reason"], "浏览器交互可能改变页面状态或提交信息，需要用户确认。")
+                    self.assertIn("once", event["content"]["approval_options"])
+                    self.assertIn("always", event["content"]["approval_options"])
+                    resolved = await get_approval_manager().resolve(request_id, approved=True)
+                    self.assertIsNotNone(resolved)
+
+        event_types = [event["type"] for event in events]
+        self.assertIn("approval_requested", event_types)
+        self.assertIn("approval_resolved", event_types)
+        self.assertEqual(events[-1]["type"], "done")
+        tool_names = [tool_call["name"] for tool_call in events[-1]["tool_calls"]]
+        self.assertIn("serana_approval_requested", tool_names)
+        self.assertIn("serana_approval_resolved", tool_names)
+        self.assertIn("serana_policy_gate", tool_names)
+        self.assertIn("browser.act_page", tool_names)
+
+    async def test_chat_stream_can_reuse_persistent_approval_for_browser_actions(self):
+        async def fake_browser_action(**kwargs):
+            return {
+                "summary": f"Executed browser action: {kwargs['action']} -> {kwargs['target']}",
+                "status": "completed",
+            }
+
+        manager = get_approval_manager()
+
+        with patch.object(SkillManager, "get_tool_function", return_value=fake_browser_action):
+            first_events = []
+            first_agent = SeranaAgent(BrowserActRouteLLM())
+            async for event in first_agent.execute_stream("点击当前页面的下载按钮"):
+                first_events.append(event)
+                if event["type"] == "approval_requested":
+                    request_id = event["content"]["request_id"]
+                    approval_request = await manager.get_request(request_id)
+                    resolved = await manager.resolve(request_id, approved=True, approval_scope="always")
+                    self.assertIsNotNone(approval_request)
+                    self.assertIsNotNone(resolved)
+                    await manager.add_grant(approval_request, resolved)
+
+            second_events = []
+            second_agent = SeranaAgent(BrowserActRouteLLM())
+            async for event in second_agent.execute_stream("再次点击当前页面的下载按钮"):
+                second_events.append(event)
+
+        self.assertIn("approval_requested", [event["type"] for event in first_events])
+        self.assertNotIn("approval_requested", [event["type"] for event in second_events])
+        second_tool_calls = second_events[-1]["tool_calls"]
+        policy_call = next(
+            tool_call for tool_call in second_tool_calls
+            if tool_call["name"] == "serana_policy_gate"
+        )
+        self.assertEqual(policy_call["output"]["decision"], "allowed_by_persistent_approval")
+
+    async def test_approval_endpoint_resolves_pending_request(self):
+        from app.core import ApprovalRequest
+
+        manager = get_approval_manager()
+        request = ApprovalRequest(
+            request_id="approval-test-001",
+            session_id="session-001",
+            tool_name="browser.act_page",
+            operation="browser_act",
+            risk_level="medium",
+            title="确认浏览器操作",
+            summary="Serana 想执行一个浏览器点击操作。",
+            approval_options=["once", "always", "deny"],
+            details={"action": "click", "target": "下载按钮"},
+            status="pending",
+            created_at="2026-05-25T00:00:00+00:00",
+            expires_at="2026-05-25T00:05:00+00:00",
+        )
+        await manager.register(request)
+
+        response = await self.client.post(
+            "/api/v1/approvals/approval-test-001",
+            json={
+                "request_id": "approval-test-001",
+                "approved": True,
+                "approval_scope": "always",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["approved"])
+        self.assertEqual(response.json()["approval_scope"], "always")
+        self.assertTrue(
+            await manager.is_granted(
+                tool_name="browser.act_page",
+                operation="browser_act",
+                risk_level="medium",
+                details={"action": "click", "target": "下载按钮"},
+            )
+        )
 
     @patch("app.api.chat.get_llm_gateway", return_value=FakeGateway())
     async def test_chat_session_delete_and_clear_flow(self, _gateway):
@@ -648,10 +987,34 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["execution_mode"], "direct")
-        tool_names = [tool_call["name"] for tool_call in payload["assistant_message"]["tool_calls"]]
+        tool_calls = payload["assistant_message"]["tool_calls"]
+        tool_names = [tool_call["name"] for tool_call in tool_calls]
         self.assertIn("conversation_route", tool_names)
         self.assertIn("calculator.multiply", tool_names)
+        calculator_call = next(tool_call for tool_call in tool_calls if tool_call["name"] == "calculator.multiply")
+        standard_result = calculator_call["output"]["tool_result"]
+        self.assertEqual(standard_result["schema_version"], "serana.tool_result.v1")
+        self.assertEqual(standard_result["result_type"], "tool")
+        self.assertEqual(standard_result["tool_name"], "calculator.multiply")
+        self.assertEqual(standard_result["status"], "completed")
+        self.assertIn("37 * 18 = 666", standard_result["user_summary"])
         self.assertIn("37 * 18 = 666", payload["assistant_message"]["content"])
+
+        timeline_response = await self.client.get(
+            "/api/v1/audit/timeline",
+            params={"entity_type": "chat_session", "entity_id": payload["session_id"]},
+        )
+        self.assertEqual(timeline_response.status_code, 200)
+        timeline_payload = timeline_response.json()
+        self.assertIn("calculator.multiply", timeline_payload["insights"]["tool_result_names"])
+        self.assertIn("completed", timeline_payload["insights"]["tool_result_statuses"])
+        self.assertIn("serana.tool_result.v1", timeline_payload["insights"]["tool_result_schema_versions"])
+        calculator_record = next(
+            record for record in timeline_response.json()["records"]
+            if record["event_type"] == "calculator.multiply"
+        )
+        self.assertEqual(calculator_record["payload"]["tool_result"]["tool_name"], "calculator.multiply")
+        self.assertEqual(calculator_record["payload"]["tool_result"]["schema_version"], "serana.tool_result.v1")
 
     @patch("app.api.chat.get_llm_gateway", return_value=FakeGateway())
     async def test_chat_uses_weather_skill_for_direct_weather_request(self, _gateway):
@@ -729,6 +1092,276 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("北京", payload["assistant_message"]["content"])
         self.assertIn("24", payload["assistant_message"]["content"])
 
+    @patch("app.api.chat.get_llm_gateway")
+    async def test_chat_can_use_browser_search_tool(self, gateway_patch):
+        gateway = BrowserGateway()
+        gateway_patch.return_value = gateway
+
+        async def fake_search_web(query: str, max_results: int = 5):
+            return {
+                "query": query,
+                "url": "https://www.bing.com/search?q=Serana+browser+test",
+                "title": "Serana browser test - Search",
+                "results": [{"title": "Serana browser test result"}],
+                "content": "Serana browser test result\nA concise browser result.",
+                "summary": "已搜索：Serana browser test，找到 1 条可见结果。",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "search_web":
+                return fake_search_web
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            response = await self.client.post(
+                "/api/v1/chat/message",
+                json={"content": "上网查一下 Serana browser test", "stream": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["execution_mode"], "direct")
+        self.assertIn("浏览器结果", payload["assistant_message"]["content"])
+        tool_names = [tool_call["name"] for tool_call in payload["assistant_message"]["tool_calls"]]
+        self.assertIn("conversation_route", tool_names)
+        self.assertIn("serana_tool_selection", tool_names)
+        self.assertIn("browser.search_web", tool_names)
+        self.assertEqual(gateway.llm.call_count, 2)
+
+    async def test_browser_screenshot_endpoint_serves_png(self):
+        screenshot_dir = Path(__file__).resolve().parent / "skills_store" / "browser" / "screenshots"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshot_dir / "test-screenshot.png"
+        screenshot_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
+            b"\x90wS\xde"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        try:
+            response = await self.client.get("/api/v1/browser/screenshots/test-screenshot.png")
+        finally:
+            screenshot_path.unlink(missing_ok=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertTrue(response.content.startswith(b"\x89PNG"))
+
+    async def test_browser_screenshot_endpoint_rejects_path_traversal(self):
+        response = await self.client.get("/api/v1/browser/screenshots/..%2Fserana.db")
+
+        self.assertEqual(response.status_code, 404)
+
+    async def test_browser_preview_endpoint_serves_html_with_csp(self):
+        preview_dir = Path(__file__).resolve().parent / "skills_store" / "browser" / "previews"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = preview_dir / "test-preview.html"
+        preview_path.write_text("<!doctype html><html><body>Demo</body></html>", encoding="utf-8")
+        try:
+            response = await self.client.get("/api/v1/browser/previews/test-preview.html")
+        finally:
+            preview_path.unlink(missing_ok=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response.headers["content-type"])
+        self.assertIn("Content-Security-Policy", response.headers)
+        self.assertTrue(response.headers.get("content-disposition", "").startswith("inline;"))
+        self.assertIn(b"Demo", response.content)
+
+    async def test_browser_preview_endpoint_rejects_path_traversal(self):
+        response = await self.client.get("/api/v1/browser/previews/..%2Fserana.db")
+
+        self.assertEqual(response.status_code, 404)
+
+    async def test_browser_download_endpoint_serves_file(self):
+        download_dir = Path(__file__).resolve().parent / "skills_store" / "browser" / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        download_path = download_dir / "report.txt"
+        download_path.write_text("download body", encoding="utf-8")
+        try:
+            response = await self.client.get("/api/v1/browser/downloads/report.txt")
+        finally:
+            download_path.unlink(missing_ok=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/plain", response.headers["content-type"])
+        self.assertEqual(response.text, "download body")
+
+    async def test_browser_download_endpoint_rejects_path_traversal(self):
+        response = await self.client.get("/api/v1/browser/downloads/..%2Fserana.db")
+
+        self.assertEqual(response.status_code, 404)
+
+    async def test_browser_create_html_preview_returns_artifact(self):
+        from skills_store.browser import create_html_preview
+
+        result = await create_html_preview(
+            "冒泡排序演示",
+            (
+                "<h1>冒泡排序演示</h1>"
+                "<button id=\"next\">下一步</button>"
+                "<p id=\"status\">准备开始</p>"
+                "<script>document.getElementById('next').addEventListener('click', function () {"
+                "document.getElementById('status').textContent = '已前进一步';"
+                "});</script>"
+            ),
+        )
+        try:
+            self.assertNotIn("error", result)
+            self.assertEqual(result["artifact"]["kind"], "html_preview")
+            self.assertTrue(result["artifact"]["download_url"].startswith("/api/v1/browser/previews/"))
+            self.assertEqual(result["browser_state"]["status"], "preview_ready")
+            self.assertTrue(Path(result["path"]).exists())
+        finally:
+            path = result.get("path")
+            if isinstance(path, str):
+                Path(path).unlink(missing_ok=True)
+
+    async def test_browser_create_html_preview_rejects_placeholder_html(self):
+        from skills_store.browser import create_html_preview
+
+        result = await create_html_preview(
+            "快速排序动画演示",
+            "<h1>快速排序动画演示</h1><div id=\"array-container\"></div><button id=\"start\">开始排序</button><script>/* JavaScript code for quicksort animation */</script>",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("占位", result["summary"])
+        self.assertEqual(result["browser_state"]["status"], "failed")
+        self.assertTrue(result["recoverable"])
+
+    async def test_browser_create_html_preview_rejects_unwired_controls(self):
+        from skills_store.browser import create_html_preview
+
+        result = await create_html_preview(
+            "快速排序动画演示",
+            "<h1>快速排序动画演示</h1><button id=\"start\">开始排序</button><script>const values = [3, 1, 2];</script>",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("事件绑定", result["summary"])
+        self.assertEqual(result["browser_state"]["status"], "failed")
+
+    async def test_browser_create_html_preview_blocks_network_html(self):
+        from skills_store.browser import create_html_preview
+
+        result = await create_html_preview(
+            "不安全演示",
+            "<h1>demo</h1><script>fetch('https://example.com')</script>",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("已拦截", result["summary"])
+        self.assertEqual(result["browser_state"]["status"], "failed")
+
+    async def test_browser_tools_return_browser_state_when_page_is_missing(self):
+        from skills_store import browser as browser_skill
+
+        await browser_skill.close_browser()
+
+        capture_result = await browser_skill.capture_page()
+        action_result = await browser_skill.act_page(action="click", target="#submit")
+
+        self.assertIn("error", capture_result)
+        self.assertFalse(capture_result["browser_state"]["page_open"])
+        self.assertEqual(capture_result["browser_state"]["status"], "missing_page")
+        self.assertTrue(capture_result["recoverable"])
+        self.assertIn("open_page", capture_result["browser_state"]["next_actions"])
+        self.assertEqual(action_result["browser_state"]["status"], "missing_page")
+
+    async def test_browser_downloads_lists_and_sends_artifact(self):
+        from skills_store import browser as browser_skill
+
+        download_dir = Path(__file__).resolve().parent / "skills_store" / "browser" / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        download_path = download_dir / "report.txt"
+        manifest_path = download_dir / "downloads.jsonl"
+        download_path.write_text("download body", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "filename": "report.txt",
+                    "mime": "text/plain",
+                    "size": download_path.stat().st_size,
+                    "mtime": download_path.stat().st_mtime,
+                    "original": "report.txt",
+                    "source_url": "https://example.com/report",
+                    "created_at": "2026-05-25T00:00:00+00:00",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            list_result = await browser_skill.browser_downloads(action="list")
+            send_result = await browser_skill.browser_downloads(action="send", filename="report.txt")
+        finally:
+            download_path.unlink(missing_ok=True)
+            manifest_path.unlink(missing_ok=True)
+
+        self.assertEqual(list_result["count"], 1)
+        self.assertIn("browser_state", list_result)
+        self.assertEqual(list_result["downloads"][0]["filename"], "report.txt")
+        self.assertEqual(send_result["artifact"]["kind"], "download")
+        self.assertEqual(send_result["browser_state"]["status"], "download_ready")
+        self.assertEqual(send_result["artifact"]["download_url"], "/api/v1/browser/downloads/report.txt")
+
+    async def test_policy_gate_requires_approval_for_browser_side_effects(self):
+        policy_gate = get_policy_gate()
+
+        browser_click = policy_gate.evaluate(
+            tool_name="browser.act_page",
+            arguments={"action": "click", "target": "提交按钮"},
+        )
+        self.assertTrue(browser_click.requires_approval)
+        self.assertEqual(browser_click.operation, "browser_act")
+
+        browser_download_send = policy_gate.evaluate(
+            tool_name="browser.browser_downloads",
+            arguments={"action": "send", "filename": "report.txt"},
+        )
+        self.assertTrue(browser_download_send.requires_approval)
+        self.assertEqual(browser_download_send.operation, "browser_download_send")
+
+        browser_observe = policy_gate.evaluate(
+            tool_name="browser.observe_page",
+            arguments={"max_chars": 2000},
+        )
+        self.assertFalse(browser_observe.requires_approval)
+
+    async def test_artifact_helpers_create_common_shape(self):
+        from app.core.artifacts import make_download_artifact, make_html_preview_artifact, make_image_artifact
+
+        image = make_image_artifact(
+            filename="screen.png",
+            download_url="/api/v1/browser/screenshots/screen.png",
+            size_bytes=12,
+        )
+        preview = make_html_preview_artifact(
+            filename="demo.html",
+            title="演示",
+            download_url="/api/v1/browser/previews/demo.html",
+            size_bytes=34,
+        )
+        download = make_download_artifact(
+            filename="report.txt",
+            mime_type="text/plain",
+            download_url="/api/v1/browser/downloads/report.txt",
+            size_bytes=56,
+        )
+
+        self.assertEqual(image["kind"], "image")
+        self.assertEqual(image["thumbnail_url"], image["download_url"])
+        self.assertEqual(preview["kind"], "html_preview")
+        self.assertEqual(preview["title"], "演示")
+        self.assertEqual(preview["mime_type"], "text/html")
+        self.assertEqual(download["kind"], "download")
+        self.assertEqual(download["mime_type"], "text/plain")
+
     async def test_profile_facts_sync_into_resident_memory_context(self):
         async with AsyncSessionLocal() as session:
             manager = ProfileFactsManager(session, self.default_user_id)
@@ -769,6 +1402,37 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(request.index("Resident memory:"), request.index("Working memory:"))
         self.assertLess(request.index("Working memory:"), request.index("Relevant memory context:"))
         self.assertLess(request.index("Relevant memory context:"), request.index("Installed instruction skills:"))
+
+    async def test_serana_context_bundle_builds_effective_prompt_and_visible_tools(self):
+        state = {
+            "user_input": "What time is it in Shanghai?",
+            "session_id": "context-test-session",
+            "execution_mode": "direct",
+            "resident_memory_context": "[Resident Memory]\n- preference: concise replies",
+            "working_memory_context": "[Working Memory]\n- current task = time lookup",
+            "memory_context": "[User Profile]\n- locale: zh-CN",
+            "instruction_skill_names": ["butler_tone"],
+            "instruction_skill_context": "## Skill: butler_tone\nKeep replies calm and practical.",
+        }
+
+        bundle = build_serana_context_bundle(state)
+        request = bundle.build_request_context(
+            label="User request",
+            include_runtime=True,
+            include_available_tools=True,
+        )
+        system_prompt = bundle.build_system_prompt(
+            "Answer directly.",
+            include_available_tools=True,
+        )
+
+        self.assertIn("Serana", system_prompt)
+        self.assertIn("Installed instruction skills", system_prompt)
+        self.assertIn("Available tools", system_prompt)
+        self.assertIn("calculator.", bundle.available_tool_context)
+        self.assertIn("Runtime context", request)
+        self.assertIn("Available tools", request)
+        self.assertLess(request.index("Resident memory:"), request.index("Working memory:"))
 
     async def test_working_memory_context_is_scoped_to_session(self):
         async with AsyncSessionLocal() as session:
@@ -1053,16 +1717,16 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(timeline_response.status_code, 200)
         timeline = timeline_response.json()
-        self.assertIn("analysis", timeline["insights"]["task_types"])
-        self.assertIn("insight_lens", timeline["insights"]["tool_names"])
+        self.assertIn("research", timeline["insights"]["task_types"])
+        self.assertIn("knowledge_scout", timeline["insights"]["tool_names"])
         self.assertIn("delegated", timeline["insights"]["lightweight_routes"])
-        self.assertIn("graph", timeline["insights"]["loop_transition_targets"])
+        self.assertIn("planning", timeline["insights"]["loop_transition_targets"])
         self.assertEqual(
             timeline["insights"]["loop_stages"],
-            ["graph_complete", "graph_start", "lightweight_complete", "lightweight_start"],
+            ["lightweight_complete", "lightweight_start", "planning_complete", "planning_start"],
         )
         self.assertEqual(
-            timeline["insights"]["graph_stages"],
+            timeline["insights"]["planning_stages"],
             ["analyze", "decompose", "delegate", "summarize"],
         )
         self.assertGreaterEqual(max(timeline["insights"]["parallel_forges"]), 2)
@@ -1073,17 +1737,17 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(debug_summary_response.status_code, 200)
         debug_summary = debug_summary_response.json()
-        self.assertIn("analysis", debug_summary["task_types"])
-        self.assertIn("insight_lens", debug_summary["tool_names"])
+        self.assertIn("research", debug_summary["task_types"])
+        self.assertIn("knowledge_scout", debug_summary["tool_names"])
         self.assertIn("aide_execute", debug_summary["event_counts"])
         self.assertIn("delegated", debug_summary["lightweight_routes"])
-        self.assertIn("graph", debug_summary["loop_transition_targets"])
+        self.assertIn("planning", debug_summary["loop_transition_targets"])
         self.assertEqual(
             debug_summary["loop_stages"],
-            ["graph_complete", "graph_start", "lightweight_complete", "lightweight_start"],
+            ["lightweight_complete", "lightweight_start", "planning_complete", "planning_start"],
         )
         self.assertEqual(
-            debug_summary["graph_stages"],
+            debug_summary["planning_stages"],
             ["analyze", "decompose", "delegate", "summarize"],
         )
 
@@ -1093,10 +1757,10 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(debug_payload["session"]["id"], payload["session_id"])
         self.assertEqual(len(debug_payload["messages"]), 2)
         self.assertEqual(debug_payload["audit_timeline"]["entity_type"], "chat_session")
-        self.assertIn("analysis", debug_payload["audit_summary"]["task_types"])
-        self.assertIn("insight_lens", debug_payload["audit_summary"]["tool_names"])
+        self.assertIn("research", debug_payload["audit_summary"]["task_types"])
+        self.assertIn("knowledge_scout", debug_payload["audit_summary"]["tool_names"])
         self.assertIn("delegated", debug_payload["audit_summary"]["lightweight_routes"])
-        self.assertIn("graph", debug_payload["audit_summary"]["loop_transition_targets"])
+        self.assertIn("planning", debug_payload["audit_summary"]["loop_transition_targets"])
 
     @patch("app.api.chat.get_llm_gateway", return_value=InstructionAwareGateway())
     async def test_chat_applies_instruction_skill_context_to_prompt(self, _gateway):
@@ -1139,15 +1803,134 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_marketplace_install_returns_local_skill_package(self):
         app.dependency_overrides[get_marketplace_client] = lambda: FakeMarketplaceClient()
 
-        response = await self.client.post(
+        requested = await self.client.post(
             "/api/v1/skills/marketplace/install",
             json={"slug": "weather"},
         )
+        self.assertEqual(requested.status_code, 200)
+        requested_payload = requested.json()
+        self.assertEqual(requested_payload["status"], "approval_required")
+        request_id = requested_payload["approval_request"]["request_id"]
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["name"], "weather")
-        self.assertEqual(payload["manifest"]["registry_slug"], "weather")
+        approved = await self.client.post(
+            f"/api/v1/approvals/{request_id}",
+            json={"request_id": request_id, "approved": True},
+        )
+        self.assertEqual(approved.status_code, 200)
+
+        installed = await self.client.post(
+            "/api/v1/skills/marketplace/install",
+            json={"slug": "weather", "approval_request_id": request_id},
+        )
+
+        self.assertEqual(installed.status_code, 200)
+        payload = installed.json()
+        self.assertEqual(payload["status"], "installed")
+        self.assertEqual(payload["skill"]["name"], "weather")
+        self.assertEqual(payload["skill"]["manifest"]["registry_slug"], "weather")
+
+        audit_response = await self.client.get(
+            "/api/v1/audit/timeline",
+            params={"entity_type": "skill_marketplace", "entity_id": "weather"},
+        )
+        self.assertEqual(audit_response.status_code, 200)
+        audit_payload = audit_response.json()
+        event_types = [record["event_type"] for record in audit_payload["records"]]
+        self.assertIn("approval_requested", event_types)
+        self.assertIn("approval_resolved", event_types)
+        self.assertIn("skills_install", event_types)
+
+    async def test_upload_skill_requires_approval_and_installs_after_confirmation(self):
+        skill_name = "approval_upload_demo"
+        temp_dir, archive_bytes = create_test_skill_archive(skill_name)
+        try:
+            requested = await self.client.post(
+                "/api/v1/skills/upload",
+                files={"file": (f"{skill_name}.zip", archive_bytes, "application/zip")},
+            )
+            self.assertEqual(requested.status_code, 200)
+            requested_payload = requested.json()
+            self.assertEqual(requested_payload["status"], "approval_required")
+            request_id = requested_payload["approval_request"]["request_id"]
+
+            approved = await self.client.post(
+                f"/api/v1/approvals/{request_id}",
+                json={"request_id": request_id, "approved": True},
+            )
+            self.assertEqual(approved.status_code, 200)
+
+            installed = await self.client.post(
+                "/api/v1/skills/upload",
+                data={"approval_request_id": request_id},
+            )
+            self.assertEqual(installed.status_code, 200)
+            installed_payload = installed.json()
+            self.assertEqual(installed_payload["status"], "installed")
+            self.assertEqual(installed_payload["skill"]["name"], skill_name)
+            self.assertTrue(installed_payload["skill"]["can_uninstall"])
+            self.assertEqual(installed_payload["skill"]["origin"], "managed")
+
+            audit_response = await self.client.get(
+                "/api/v1/audit/timeline",
+                params={"entity_type": "skill_local_package", "entity_id": skill_name},
+            )
+            self.assertEqual(audit_response.status_code, 200)
+            event_types = [record["event_type"] for record in audit_response.json()["records"]]
+            self.assertIn("approval_requested", event_types)
+            self.assertIn("approval_resolved", event_types)
+            self.assertIn("skills_install_local", event_types)
+        finally:
+            SkillManager().remove_skill(skill_name)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def test_delete_skill_requires_approval_for_managed_skills(self):
+        skill_name = "managed_delete_demo"
+        temp_dir, _ = create_test_skill_archive(skill_name)
+        manager = SkillManager()
+        installed_skill = manager.install_skill_from_directory(temp_dir / skill_name)
+        self.assertIsNotNone(installed_skill)
+
+        try:
+            requested = await self.client.delete(f"/api/v1/skills/{skill_name}")
+            self.assertEqual(requested.status_code, 200)
+            requested_payload = requested.json()
+            self.assertEqual(requested_payload["status"], "approval_required")
+            request_id = requested_payload["approval_request"]["request_id"]
+
+            approved = await self.client.post(
+                f"/api/v1/approvals/{request_id}",
+                json={"request_id": request_id, "approved": True},
+            )
+            self.assertEqual(approved.status_code, 200)
+
+            removed = await self.client.delete(
+                f"/api/v1/skills/{skill_name}",
+                params={"approval_request_id": request_id},
+            )
+            self.assertEqual(removed.status_code, 200)
+            removed_payload = removed.json()
+            self.assertEqual(removed_payload["status"], "removed")
+            self.assertEqual(removed_payload["skill"]["name"], skill_name)
+            self.assertIsNone(manager.get_skill(skill_name))
+
+            audit_response = await self.client.get(
+                "/api/v1/audit/timeline",
+                params={"entity_type": "skill_local", "entity_id": skill_name},
+            )
+            self.assertEqual(audit_response.status_code, 200)
+            event_types = [record["event_type"] for record in audit_response.json()["records"]]
+            self.assertIn("approval_requested", event_types)
+            self.assertIn("approval_resolved", event_types)
+            self.assertIn("skills_uninstall", event_types)
+        finally:
+            SkillManager().remove_skill(skill_name)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def test_bundled_skill_cannot_be_deleted(self):
+        response = await self.client.delete("/api/v1/skills/weather")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不能直接卸载", response.text)
 
     @patch("app.api.goals.get_llm_gateway", return_value=FakeGateway())
     async def test_goal_creation_returns_subtasks(self, _gateway):
@@ -1298,15 +2081,15 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         timeline_event_types = [record["event_type"] for record in timeline["records"]]
         self.assertIn("planned", timeline_event_types)
         self.assertIn("forge_execute", timeline_event_types)
-        self.assertIn("analysis", timeline["insights"]["task_types"])
-        self.assertIn("insight_lens", timeline["insights"]["tool_names"])
-        self.assertIn("graph", timeline["insights"]["loop_transition_targets"])
+        self.assertIn("research", timeline["insights"]["task_types"])
+        self.assertIn("knowledge_scout", timeline["insights"]["tool_names"])
+        self.assertIn("planning", timeline["insights"]["loop_transition_targets"])
         self.assertEqual(
             timeline["insights"]["loop_stages"],
-            ["graph_complete", "graph_start", "lightweight_complete", "lightweight_start"],
+            ["lightweight_complete", "lightweight_start", "planning_complete", "planning_start"],
         )
         self.assertEqual(
-            timeline["insights"]["graph_stages"],
+            timeline["insights"]["planning_stages"],
             ["analyze", "decompose", "delegate", "summarize"],
         )
         self.assertGreaterEqual(max(timeline["insights"]["parallel_forges"]), 2)
@@ -1317,16 +2100,16 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(debug_summary_response.status_code, 200)
         debug_summary = debug_summary_response.json()
-        self.assertIn("analysis", debug_summary["task_types"])
-        self.assertIn("insight_lens", debug_summary["tool_names"])
+        self.assertIn("research", debug_summary["task_types"])
+        self.assertIn("knowledge_scout", debug_summary["tool_names"])
         self.assertIn("forge_execute", debug_summary["event_counts"])
-        self.assertIn("graph", debug_summary["loop_transition_targets"])
+        self.assertIn("planning", debug_summary["loop_transition_targets"])
         self.assertEqual(
             debug_summary["loop_stages"],
-            ["graph_complete", "graph_start", "lightweight_complete", "lightweight_start"],
+            ["lightweight_complete", "lightweight_start", "planning_complete", "planning_start"],
         )
         self.assertEqual(
-            debug_summary["graph_stages"],
+            debug_summary["planning_stages"],
             ["analyze", "decompose", "delegate", "summarize"],
         )
 
@@ -1335,9 +2118,9 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         debug_payload = debug_response.json()
         self.assertEqual(debug_payload["goal"]["id"], goal_id)
         self.assertEqual(debug_payload["audit_timeline"]["entity_type"], "goal")
-        self.assertIn("analysis", debug_payload["audit_summary"]["task_types"])
-        self.assertIn("insight_lens", debug_payload["audit_summary"]["tool_names"])
-        self.assertIn("graph", debug_payload["audit_summary"]["loop_transition_targets"])
+        self.assertIn("research", debug_payload["audit_summary"]["task_types"])
+        self.assertIn("knowledge_scout", debug_payload["audit_summary"]["tool_names"])
+        self.assertIn("planning", debug_payload["audit_summary"]["loop_transition_targets"])
 
     @patch("app.api.goals.get_llm_gateway", return_value=FakeGateway())
     async def test_simple_goal_stays_direct(self, _gateway):
@@ -1347,7 +2130,10 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["progress"], 1.0)
         self.assertEqual(len(payload["subtasks"]), 1)
+        self.assertEqual(payload["subtasks"][0]["status"], "completed")
         self.assertTrue(payload["subtasks"][0]["description"].startswith("Handle directly with Serana:"))
         audit_event_types = [record["event_type"] for record in payload["audit_records"]]
         self.assertIn("conversation_route", audit_event_types)
@@ -1542,12 +2328,436 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(delegate_call["output"]["actual_forge_agents"], 2)
         tool_names = [tool_call["name"] for tool_call in result["tool_calls"]]
         self.assertIn("serana_loop_transition", tool_names)
-        graph_stages = [
+        loop_actions = [
+            tool_call["output"]
+            for tool_call in result["tool_calls"]
+            if tool_call["name"] == "serana_loop_action"
+        ]
+        self.assertEqual([action["status"] for action in loop_actions], ["started", "completed"])
+        self.assertTrue(all(action["action"] == "delegate_agents" for action in loop_actions))
+        self.assertTrue(all(action["runtime"] == "conversation_loop" for action in loop_actions))
+        planning_stages = [
             tool_call["output"]["stage"]
             for tool_call in result["tool_calls"]
-            if tool_call["name"] == "serana_graph_stage"
+            if tool_call["name"] == "serana_planning_stage"
         ]
-        self.assertEqual(graph_stages, ["analyze", "decompose", "delegate", "summarize"])
+        self.assertEqual(planning_stages, ["analyze", "decompose", "delegate", "summarize"])
+        self.assertNotIn("serana_graph_stage", tool_names)
+
+    async def test_delegate_records_agent_lifecycle_and_standard_tool_results(self):
+        state = {
+            "user_input": "Research and compare a study plan",
+            "original_user_input": "Research and compare a study plan",
+            "goal_type": "research",
+            "complexity": "high",
+            "execution_mode": "delegated",
+            "thinking_blocks": [],
+            "tool_calls": [],
+            "tool_results": [],
+            "aide_sessions": [],
+            "forge_sessions": [],
+            "working_memory_entries": {},
+            "working_memory_context": "",
+            "subtasks": [
+                {
+                    "id": "subtask-ok",
+                    "description": "Research useful study plan options",
+                    "status": "pending",
+                    "order": 1,
+                },
+                {
+                    "id": "subtask-fail",
+                    "description": "What should be verified before choosing the final plan?",
+                    "status": "pending",
+                    "order": 2,
+                    "failures_before_success": 99,
+                },
+            ],
+            "delegation_plan": {
+                "execution_mode": "delegated",
+                "parallel_aides": 2,
+                "parallel_forges": 2,
+                "parallel_slots": 2,
+            },
+        }
+
+        result = await delegate_node(state, FakeLLM())
+
+        self.assertEqual(len(result["subtasks"]), 2)
+        self.assertEqual(result["subtasks"][0]["assignment"]["coordinator"], "aide")
+        self.assertEqual(result["subtasks"][0]["assignment"]["worker"], "forge")
+        self.assertEqual(result["subtasks"][1]["status"], "failed")
+        self.assertIsNotNone(result["delegation_fallback_summary"])
+
+        lifecycle_calls = [
+            tool_call for tool_call in result["tool_calls"]
+            if tool_call["name"] == "serana_agent_lifecycle"
+        ]
+        self.assertGreaterEqual(len(lifecycle_calls), 4)
+        self.assertIn("started", [tool_call["output"]["status"] for tool_call in lifecycle_calls])
+        self.assertIn("failed", [tool_call["output"]["status"] for tool_call in lifecycle_calls])
+
+        delegate_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_delegate"
+        )
+        self.assertIn("tool_result", delegate_call["output"])
+        self.assertEqual(delegate_call["output"]["tool_result"]["schema_version"], "serana.tool_result.v1")
+        self.assertEqual(delegate_call["output"]["tool_result"]["tool_name"], "serana.delegate")
+        self.assertIn("assignments", delegate_call["output"])
+
+        tool_result_names = [tool_result["tool_name"] for tool_result in result["tool_results"]]
+        self.assertIn("serana.aide_execute", tool_result_names)
+        self.assertIn("serana.forge_execute", tool_result_names)
+        self.assertIn("serana.delegate", tool_result_names)
+
+    async def test_serana_uses_one_llm_call_for_complex_delegated_requests(self):
+        llm = CountingLLM()
+        agent = SeranaAgent(llm)
+
+        result = await agent.execute("Research and build a weekly study plan")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["execution_mode"], "delegated")
+        self.assertEqual(result["goal_type"], "research")
+        self.assertEqual(result["complexity"], "high")
+        self.assertEqual(llm.call_count, 1)
+        analyze_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_analyze"
+        )
+        decompose_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_decompose"
+        )
+        self.assertEqual(analyze_call["output"]["analysis_source"], "lightweight_route")
+        self.assertEqual(decompose_call["output"]["decomposition_source"], "template")
+        summarize_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_summarize"
+        )
+        self.assertEqual(summarize_call["output"]["summary_source"], "local_template")
+
+    async def test_analyze_reuses_lightweight_delegated_route(self):
+        llm = CountingLLM()
+        state = {
+            "user_input": "Research and build a weekly study plan",
+            "original_user_input": "Research and build a weekly study plan",
+            "thinking_blocks": [],
+            "tool_calls": [],
+            "conversation_route": {
+                "route": "delegated",
+                "goal_type": "research",
+                "summary": "Build a weekly study plan",
+                "complexity": "high",
+                "reason": "Needs planning",
+            },
+        }
+
+        result = await analyze_node(state, llm)
+
+        self.assertEqual(llm.call_count, 0)
+        self.assertEqual(result["goal_type"], "research")
+        self.assertEqual(result["complexity"], "high")
+        analyze_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_analyze"
+        )
+        self.assertEqual(analyze_call["output"]["analysis_source"], "lightweight_route")
+
+    async def test_decompose_reuses_lightweight_delegated_route(self):
+        llm = CountingLLM()
+        state = {
+            "user_input": "Research and build a weekly study plan",
+            "original_user_input": "Research and build a weekly study plan",
+            "goal_type": "research",
+            "complexity": "high",
+            "thinking_blocks": [],
+            "tool_calls": [],
+            "working_memory_entries": {},
+            "working_memory_context": "",
+            "conversation_route": {
+                "route": "delegated",
+                "goal_type": "research",
+                "summary": "Build a weekly study plan",
+                "complexity": "high",
+                "reason": "Needs planning",
+            },
+        }
+
+        result = await decompose_node(state, llm)
+
+        self.assertEqual(llm.call_count, 0)
+        self.assertEqual(len(result["subtasks"]), 3)
+        decompose_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_decompose"
+        )
+        self.assertEqual(decompose_call["output"]["decomposition_source"], "template")
+
+    async def test_summarize_uses_local_template_for_delegated_results(self):
+        llm = CountingLLM()
+        state = {
+            "user_input": "Research and build a weekly study plan",
+            "original_user_input": "Research and build a weekly study plan",
+            "execution_mode": "delegated",
+            "thinking_blocks": [],
+            "tool_calls": [],
+            "working_memory_entries": {},
+            "working_memory_context": "",
+            "subtasks": [
+                {
+                    "description": "Clarify the research question and success criteria",
+                    "status": "completed",
+                },
+                {
+                    "description": "Gather and compare the most relevant findings",
+                    "status": "completed",
+                },
+            ],
+        }
+
+        result = await summarize_node(state, llm)
+
+        self.assertEqual(llm.call_count, 0)
+        self.assertIn("主要步骤", result["final_response"])
+        summarize_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_summarize"
+        )
+        self.assertEqual(summarize_call["output"]["summary_source"], "local_template")
+
+    async def test_lightweight_route_keeps_failed_tool_selection_trace(self):
+        state = {
+            "user_input": "Use my calendar tool to create an event",
+            "original_user_input": "Use my calendar tool to create an event",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+
+        result = await try_lightweight_conversation(state, UnsupportedToolRouteLLM())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "delegated")
+        self.assertEqual(result["conversation_route"]["route"], "direct_tool")
+        selection_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "serana_tool_selection"
+        )
+        self.assertEqual(selection_call["status"], "failed")
+        self.assertEqual(selection_call["output"]["status"], "rejected")
+        self.assertEqual(selection_call["input"]["requested_tool_name"], "calendar.create_event")
+
+    async def test_lightweight_route_can_use_browser_search(self):
+        llm = BrowserRouteLLM()
+        state = {
+            "user_input": "上网查一下 Serana browser test",
+            "original_user_input": "上网查一下 Serana browser test",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+
+        async def fake_search_web(query: str, max_results: int = 5):
+            return {
+                "query": query,
+                "url": "https://www.bing.com/search?q=Serana+browser+test",
+                "title": "Serana browser test - Search",
+                "results": [{"title": "Serana browser test result"}],
+                "content": "Serana browser test result\nA concise browser result.",
+                "summary": "已搜索：Serana browser test，找到 1 条可见结果。",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "search_web":
+                return fake_search_web
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            result = await try_lightweight_conversation(state, llm)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(result["final_response"], "我查到了浏览器结果：Serana browser test 的第一条结果可用。")
+        self.assertEqual(llm.call_count, 2)
+        tool_names = [tool_call["name"] for tool_call in result["tool_calls"]]
+        self.assertIn("conversation_route", tool_names)
+        self.assertIn("serana_tool_selection", tool_names)
+        self.assertIn("browser.search_web", tool_names)
+
+    async def test_lightweight_route_can_use_browser_capture(self):
+        state = {
+            "user_input": "给当前网页截个图",
+            "original_user_input": "给当前网页截个图",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+
+        async def fake_capture_page(full_page: bool = False):
+            return {
+                "url": "https://example.com/",
+                "title": "Example Domain",
+                "path": "D:/agent-serana/backend/skills_store/browser/screenshots/example.png",
+                "artifact": {
+                    "kind": "image",
+                    "filename": "example.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 123,
+                    "download_url": "/api/v1/browser/screenshots/example.png",
+                    "thumbnail_url": "/api/v1/browser/screenshots/example.png",
+                },
+                "artifact_url": "/api/v1/browser/screenshots/example.png",
+                "mime_type": "image/png",
+                "full_page": full_page,
+                "summary": "已截取当前浏览器页面：example.png",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "capture_page":
+                return fake_capture_page
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            result = await try_lightweight_conversation(state, BrowserCaptureRouteLLM())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(result["final_response"], "当前网页截图已经保存好了。")
+        capture_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "browser.capture_page"
+        )
+        self.assertTrue(capture_call["input"]["full_page"])
+        self.assertIn("path", capture_call["output"])
+        self.assertEqual(capture_call["output"]["artifact"]["kind"], "image")
+        self.assertEqual(capture_call["output"]["tool_result"]["tool_name"], "browser.capture_page")
+        self.assertEqual(capture_call["output"]["tool_result"]["artifact"]["kind"], "image")
+
+    async def test_lightweight_route_can_use_browser_look(self):
+        state = {
+            "user_input": "看一下当前网页显示是否正常",
+            "original_user_input": "看一下当前网页显示是否正常",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+        screenshot_dir = Path(__file__).resolve().parent / "skills_store" / "browser" / "screenshots"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshot_dir / "look-test.png"
+        screenshot_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00"
+            b"\x90wS\xde"
+        )
+
+        async def fake_look_page(full_page: bool = False):
+            return {
+                "url": "https://example.com/",
+                "title": "Example Domain",
+                "path": str(screenshot_path),
+                "mime_type": "image/png",
+                "full_page": full_page,
+                "dimensions": {"width": 1280, "height": 900},
+                "model_observation": {
+                    "kind": "browser_visual_snapshot",
+                    "image_path": str(screenshot_path),
+                    "mime_type": "image/png",
+                    "dimensions": {"width": 1280, "height": 900},
+                    "runtime_only": True,
+                },
+                "summary": "已观察当前浏览器页面的视觉快照：look.png",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "look_page":
+                return fake_look_page
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        llm = BrowserLookRouteLLM()
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            result = await try_lightweight_conversation(state, llm)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(result["final_response"], "当前网页视觉快照看起来正常。")
+        look_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "browser.look_page"
+        )
+        self.assertFalse(look_call["input"]["full_page"])
+        self.assertNotIn("artifact", look_call["output"])
+        self.assertEqual(look_call["output"]["model_observation"]["kind"], "browser_visual_snapshot")
+        self.assertIsInstance(llm.summary_content, list)
+        image_blocks = [
+            block for block in llm.summary_content if isinstance(block, dict) and block.get("type") == "image_url"
+        ]
+        self.assertEqual(len(image_blocks), 1)
+        self.assertTrue(image_blocks[0]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    async def test_lightweight_route_can_create_html_preview(self):
+        state = {
+            "user_input": "用浏览器展示冒泡排序的演示",
+            "original_user_input": "用浏览器展示冒泡排序的演示",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+        captured = {}
+
+        async def fake_create_html_preview(title: str, html: str):
+            captured["title"] = title
+            captured["html"] = html
+            return {
+                "title": title,
+                "path": "D:/agent-serana/backend/skills_store/browser/previews/bubble.html",
+                "artifact": {
+                    "kind": "html_preview",
+                    "filename": "bubble.html",
+                    "title": title,
+                    "mime_type": "text/html",
+                    "size_bytes": len(html.encode("utf-8")),
+                    "download_url": "/api/v1/browser/previews/bubble.html",
+                },
+                "artifact_url": "/api/v1/browser/previews/bubble.html",
+                "mime_type": "text/html",
+                "summary": "已生成可打开的演示页面：bubble.html",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "create_html_preview":
+                return fake_create_html_preview
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            result = await try_lightweight_conversation(state, BrowserPreviewRouteLLM())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(result["final_response"], "我已经生成了一个可打开的冒泡排序演示页面。")
+        preview_call = next(
+            tool_call for tool_call in result["tool_calls"] if tool_call["name"] == "browser.create_html_preview"
+        )
+        self.assertEqual(preview_call["output"]["artifact"]["kind"], "html_preview")
+        self.assertEqual(preview_call["output"]["artifact"]["download_url"], "/api/v1/browser/previews/bubble.html")
+        self.assertIn("<script>", captured["html"])
+        self.assertNotIn("offline demo script here", captured["html"].lower())
+
+    async def test_skill_manager_shutdown_closes_browser_skill(self):
+        manager = SkillManager()
+        called = {"closed": False}
+
+        async def fake_close_browser():
+            called["closed"] = True
+            return {"closed": True}
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "close_browser":
+                return fake_close_browser
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            await manager.shutdown()
+
+        self.assertTrue(called["closed"])
 
     async def test_serana_goal_keeps_planning_requests_out_of_lightweight_time_route(self):
         llm = FakeLLM()
@@ -1556,13 +2766,18 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await agent.execute_goal("Plan a relaxed travel day with buffer time")
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["execution_mode"], "delegated")
+        self.assertEqual(result["execution_mode"], "planned")
         tool_names = [tool_call["name"] for tool_call in result["tool_calls"]]
         self.assertIn("serana_loop_transition", tool_names)
-        self.assertIn("serana_delegate", tool_names)
+        self.assertIn("serana_decompose", tool_names)
+        self.assertIn("serana_summarize", tool_names)
+        self.assertNotIn("serana_delegate", tool_names)
+        self.assertNotIn("aide_execute", tool_names)
+        self.assertNotIn("forge_execute", tool_names)
         self.assertNotIn("time_manager.get_current_time", tool_names)
         self.assertNotIn("time_manager.get_day_info", tool_names)
 
 
 if __name__ == "__main__":
     unittest.main()
+

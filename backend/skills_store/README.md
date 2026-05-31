@@ -1,86 +1,24 @@
-# Skill Store
+# skills_store 目录说明
 
-This directory contains local skill packages that can be discovered and loaded by the backend skill manager.
-
-## Purpose
-
-Skill packages extend the backend with reusable local tools. Each package lives in its own directory and exposes metadata through `skill.json`, plus human-readable guidance in `SKILL.md`.
-
-## Current Local Packages
-
-- `calculator`
-- `time_manager`
-- `note_manager`
-- `data_operations`
-- `weather`
-
-The repository intentionally excludes simulated or mock external-service skills.
-
-## Expected Package Layout
+这里是后端技能文件仓库，按来源分成三层：
 
 ```text
-skill_name/
-+-- SKILL.md
-+-- skill.json
-+-- __init__.py
+skills_store/
++-- browser/            项目内置 bundled skill
++-- calculator/         项目内置 bundled skill
++-- data_operations/    项目内置 bundled skill
++-- memory_manager/     项目内置 bundled skill
++-- note_manager/       项目内置 bundled skill
++-- time_manager/       项目内置 bundled skill
++-- weather/            项目内置 bundled skill
++-- installed/          运行时安装的 managed skills，可卸载
++-- .staging/           等待审批的本地 ZIP 导入暂存目录
 ```
 
-## Minimal Package Metadata
+## 约定
 
-```json
-{
-  "name": "skill_name",
-  "version": "1.0.0",
-  "description": "Short package description",
-  "author": "Author name",
-  "format": "sebastian_package",
-  "runtime": "python",
-  "instruction_file": "SKILL.md",
-  "entrypoint": "__init__.py",
-  "agent_type": "all",
-  "max_instances": 3,
-  "tools": [
-    {
-      "name": "tool_name",
-      "description": "Tool description",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "param": {
-            "type": "string",
-            "description": "Parameter description"
-          }
-        },
-        "required": ["param"]
-      }
-    }
-  ]
-}
-```
-
-## Minimal Skill Guidance
-
-```md
-# Skill Name
-
-Use this skill when the user needs a specific local capability.
-
-## Tools
-
-- `tool_name`
-```
-
-## Minimal Python Runtime
-
-```python
-from typing import Any, Dict
-
-
-async def tool_name(param: str) -> Dict[str, Any]:
-    return {"result": param}
-```
-
-## Related Docs
-
-- [Backend Guide](../README.md)
-- [Architecture](../../docs/Architecture.md)
+- 根目录下现有技能视为 bundled skills，由项目代码直接维护
+- `installed/` 只放运行时安装的技能，前端允许对它们执行卸载
+- `.staging/` 只做审批前暂存，不参与正常扫描
+- 新增 bundled skill 时，在根目录直接建子目录，并补对应 `README.md`
+- 不要把运行时产物提交到仓库；相关目录应由 `.gitignore` 忽略

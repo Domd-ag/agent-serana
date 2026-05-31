@@ -2,13 +2,16 @@ package com.serana.app.data.api
 
 import com.google.gson.annotations.SerializedName
 import com.serana.app.data.models.ChatSession
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Multipart
 import retrofit2.http.POST
-import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Part
 import retrofit2.http.Query
 
 interface ApiService {
@@ -29,6 +32,12 @@ interface ApiService {
 
     @POST("chat/message")
     suspend fun sendMessage(@Body request: SendMessageRequest): Response<ChatCompletionResponseDto>
+
+    @POST("approvals/{requestId}")
+    suspend fun submitApprovalDecision(
+        @Path("requestId") requestId: String,
+        @Body request: ApprovalDecisionRequest,
+    ): Response<ApprovalResponseDto>
 
     @GET("llm/config")
     suspend fun getLlmConfig(): Response<LlmConfigDto?>
@@ -51,6 +60,21 @@ interface ApiService {
     @GET("skills/{skillName}/tools")
     suspend fun getSkillTools(@Path("skillName") skillName: String): Response<List<SkillToolDto>>
 
+    @GET("skills/{skillName}/lifecycle")
+    suspend fun getSkillLifecycle(@Path("skillName") skillName: String): Response<SkillLifecycleStatusDto>
+
+    @POST("skills/{skillName}/scope")
+    suspend fun updateSkillScope(
+        @Path("skillName") skillName: String,
+        @Body request: SkillScopeUpdateRequest,
+    ): Response<SkillMutationResponseDto>
+
+    @POST("skills/{skillName}/update")
+    suspend fun updateSkill(
+        @Path("skillName") skillName: String,
+        @Body request: SkillUpdateRequest,
+    ): Response<SkillMutationResponseDto>
+
     @GET("skills/marketplace")
     suspend fun getMarketplaceSkills(
         @Query("limit") limit: Int = 20,
@@ -67,13 +91,26 @@ interface ApiService {
     @POST("skills/marketplace/install")
     suspend fun installMarketplaceSkill(
         @Body request: MarketplaceInstallRequest,
-    ): Response<SkillPackageDto>
+    ): Response<MarketplaceInstallResponseDto>
+
+    @Multipart
+    @POST("skills/upload")
+    suspend fun uploadSkill(
+        @Part file: MultipartBody.Part? = null,
+        @Part("approval_request_id") approvalRequestId: RequestBody? = null,
+    ): Response<SkillMutationResponseDto>
 
     @POST("skills/{skillName}/enable")
     suspend fun enableSkill(@Path("skillName") skillName: String): Response<SimpleStatusResponse>
 
     @POST("skills/{skillName}/disable")
     suspend fun disableSkill(@Path("skillName") skillName: String): Response<SimpleStatusResponse>
+
+    @DELETE("skills/{skillName}")
+    suspend fun deleteSkill(
+        @Path("skillName") skillName: String,
+        @Query("approval_request_id") approvalRequestId: String? = null,
+    ): Response<SkillMutationResponseDto>
 }
 
 data class SendMessageRequest(
@@ -139,6 +176,51 @@ data class ToolCallDto(
     val timestamp: String,
 )
 
+data class ApprovalRequestDto(
+    @SerializedName("request_id")
+    val requestId: String,
+    @SerializedName("session_id")
+    val sessionId: String? = null,
+    @SerializedName("tool_name")
+    val toolName: String? = null,
+    val operation: String,
+    @SerializedName("risk_level")
+    val riskLevel: String,
+    val title: String,
+    val summary: String,
+    val reason: String? = null,
+    @SerializedName("approval_options")
+    val approvalOptions: List<String> = emptyList(),
+    val details: Map<String, Any?> = emptyMap(),
+    val status: String,
+    @SerializedName("created_at")
+    val createdAt: String,
+    @SerializedName("expires_at")
+    val expiresAt: String? = null,
+)
+
+data class ApprovalDecisionRequest(
+    @SerializedName("request_id")
+    val requestId: String,
+    val approved: Boolean,
+    val reviewer: String = "user",
+    val note: String? = null,
+    @SerializedName("approval_scope")
+    val approvalScope: String = "once",
+)
+
+data class ApprovalResponseDto(
+    @SerializedName("request_id")
+    val requestId: String,
+    val approved: Boolean,
+    val reviewer: String,
+    val note: String? = null,
+    @SerializedName("approval_scope")
+    val approvalScope: String = "once",
+    @SerializedName("resolved_at")
+    val resolvedAt: String? = null,
+)
+
 data class AuditRecordDto(
     val id: String,
     @SerializedName("entity_type")
@@ -161,6 +243,14 @@ data class AuditInsightsDto(
     val strategies: List<String> = emptyList(),
     @SerializedName("tool_names")
     val toolNames: List<String> = emptyList(),
+    @SerializedName("tool_result_names")
+    val toolResultNames: List<String> = emptyList(),
+    @SerializedName("tool_result_statuses")
+    val toolResultStatuses: List<String> = emptyList(),
+    @SerializedName("tool_result_schema_versions")
+    val toolResultSchemaVersions: List<String> = emptyList(),
+    @SerializedName("artifact_kinds")
+    val artifactKinds: List<String> = emptyList(),
     @SerializedName("execution_modes")
     val executionModes: List<String> = emptyList(),
     @SerializedName("retry_limits")
@@ -173,6 +263,8 @@ data class AuditInsightsDto(
     val parallelSlots: List<Int> = emptyList(),
     @SerializedName("parallel_forges")
     val parallelForges: List<Int> = emptyList(),
+    @SerializedName("planning_stages")
+    val planningStages: List<String> = emptyList(),
     @SerializedName("agent_ids")
     val agentIds: List<String> = emptyList(),
     @SerializedName("failed_event_types")
@@ -239,12 +331,86 @@ data class SkillPackageDto(
     val isInstalled: Boolean,
     @SerializedName("installed_at")
     val installedAt: String? = null,
+    val origin: String = "bundled",
+    @SerializedName("can_uninstall")
+    val canUninstall: Boolean = false,
+    @SerializedName("registry_slug")
+    val registrySlug: String? = null,
+    @SerializedName("source_url")
+    val sourceUrl: String? = null,
+    @SerializedName("source_label")
+    val sourceLabel: String = "项目内置",
+    @SerializedName("trust_state")
+    val trustState: String = "trusted",
+    @SerializedName("effective_scope")
+    val effectiveScope: String = "forge",
+    @SerializedName("can_update")
+    val canUpdate: Boolean = false,
+    @SerializedName("latest_version")
+    val latestVersion: String? = null,
+    @SerializedName("update_available")
+    val updateAvailable: Boolean = false,
+)
+
+data class SkillLifecycleStatusDto(
+    @SerializedName("skill_name")
+    val skillName: String,
+    @SerializedName("installed_version")
+    val installedVersion: String,
+    @SerializedName("latest_version")
+    val latestVersion: String? = null,
+    @SerializedName("update_available")
+    val updateAvailable: Boolean = false,
+    @SerializedName("can_update")
+    val canUpdate: Boolean = false,
+    @SerializedName("can_uninstall")
+    val canUninstall: Boolean = false,
+    @SerializedName("source_label")
+    val sourceLabel: String,
+    @SerializedName("source_url")
+    val sourceUrl: String? = null,
+    @SerializedName("trust_state")
+    val trustState: String,
+    @SerializedName("effective_scope")
+    val effectiveScope: String,
+    @SerializedName("registry_slug")
+    val registrySlug: String? = null,
+)
+
+data class SkillScopeUpdateRequest(
+    @SerializedName("agent_type")
+    val agentType: String,
+)
+
+data class SkillUpdateRequest(
+    val version: String? = null,
+    val tag: String? = null,
+    @SerializedName("approval_request_id")
+    val approvalRequestId: String? = null,
+)
+
+data class SkillMutationResponseDto(
+    val status: String,
+    val skill: SkillPackageDto? = null,
+    @SerializedName("approval_request")
+    val approvalRequest: ApprovalRequestDto? = null,
+    val message: String? = null,
 )
 
 data class MarketplaceInstallRequest(
     val slug: String,
     val version: String? = null,
     val tag: String? = null,
+    @SerializedName("approval_request_id")
+    val approvalRequestId: String? = null,
+)
+
+data class MarketplaceInstallResponseDto(
+    val status: String,
+    val skill: SkillPackageDto? = null,
+    @SerializedName("approval_request")
+    val approvalRequest: ApprovalRequestDto? = null,
+    val message: String? = null,
 )
 
 data class MarketplaceSkillDto(

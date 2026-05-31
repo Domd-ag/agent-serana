@@ -1,7 +1,9 @@
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.agents.serana.persona import load_serana_persona
 from app.skills import SkillManager
 
 
@@ -50,6 +52,8 @@ def build_contextual_request(
     working_memory_context: str = "",
     memory_context: str = "",
     instruction_skill_context: str = "",
+    runtime_context: str = "",
+    available_tool_context: str = "",
     label: str = "User message",
 ) -> str:
     sections = [f"{label}:\n{user_input}"]
@@ -66,7 +70,167 @@ def build_contextual_request(
     if instruction_skill_context.strip():
         sections.append(f"Installed instruction skills:\n{instruction_skill_context.strip()}")
 
+    if runtime_context.strip():
+        sections.append(f"Runtime context:\n{runtime_context.strip()}")
+
+    if available_tool_context.strip():
+        sections.append(f"Available tools:\n{available_tool_context.strip()}")
+
     return "\n\n".join(sections)
+
+
+@dataclass(frozen=True)
+class SeranaContextBundle:
+    user_input: str
+    persona: str
+    resident_memory_context: str = ""
+    working_memory_context: str = ""
+    memory_context: str = ""
+    instruction_skill_context: str = ""
+    instruction_skill_names: tuple[str, ...] = ()
+    runtime_context: str = ""
+    available_tool_context: str = ""
+
+    @property
+    def has_instruction_skills(self) -> bool:
+        return bool(self.instruction_skill_context.strip())
+
+    def build_request_context(
+        self,
+        *,
+        label: str = "User message",
+        user_input: str | None = None,
+        include_resident_memory: bool = True,
+        include_working_memory: bool = True,
+        include_memory: bool = True,
+        include_instruction_skills: bool = True,
+        include_runtime: bool = False,
+        include_available_tools: bool = False,
+    ) -> str:
+        return build_contextual_request(
+            (user_input or self.user_input).strip(),
+            resident_memory_context=self.resident_memory_context if include_resident_memory else "",
+            working_memory_context=self.working_memory_context if include_working_memory else "",
+            memory_context=self.memory_context if include_memory else "",
+            instruction_skill_context=self.instruction_skill_context if include_instruction_skills else "",
+            runtime_context=self.runtime_context if include_runtime else "",
+            available_tool_context=self.available_tool_context if include_available_tools else "",
+            label=label,
+        )
+
+    def build_system_prompt(
+        self,
+        task_instruction: str,
+        *,
+        include_instruction_skills: bool | None = None,
+        include_available_tools: bool = False,
+        include_runtime: bool = False,
+    ) -> str:
+        sections = [
+            self.persona,
+            "## Current task\n" + task_instruction.strip(),
+        ]
+
+        should_include_skills = self.has_instruction_skills if include_instruction_skills is None else include_instruction_skills
+        if should_include_skills:
+            sections.append(
+                "## Installed instruction skills\n"
+                "Use relevant installed instruction skills as behavioral guidance. "
+                "Do not mention internal skill names unless the user explicitly asks about system internals."
+            )
+
+        if include_available_tools and self.available_tool_context.strip():
+            sections.append(
+                "## Available tools\n"
+                "These are the currently visible local tools. Prefer them when they directly match the user's intent.\n"
+                f"{self.available_tool_context.strip()}"
+            )
+
+        if include_runtime and self.runtime_context.strip():
+            sections.append("## Runtime context\n" + self.runtime_context.strip())
+
+        return "\n\n".join(section for section in sections if section.strip())
+
+
+def _build_runtime_context(state: dict[str, Any]) -> str:
+    lines: list[str] = []
+    session_id = str(state.get("session_id") or "").strip()
+    if session_id:
+        lines.append(f"- session_id: {session_id}")
+    execution_mode = str(state.get("execution_mode") or "").strip()
+    if execution_mode:
+        lines.append(f"- execution_mode: {execution_mode}")
+    goal_type = str(state.get("goal_type") or "").strip()
+    if goal_type:
+        lines.append(f"- goal_type: {goal_type}")
+    complexity = str(state.get("complexity") or "").strip()
+    if complexity:
+        lines.append(f"- complexity: {complexity}")
+    return "\n".join(lines)
+
+
+def build_available_tool_context(*, max_chars: int = 4000) -> str:
+    skill_manager = SkillManager()
+    skill_manager.ensure_initialized()
+
+    lines: list[str] = []
+    for skill in skill_manager.list_skills():
+        if not skill.is_enabled:
+            continue
+        if skill.agent_type not in {"all", "serana"}:
+            continue
+        for tool in skill.manifest.tools:
+            line = f"- {skill.name}.{tool.name}: {tool.description}"
+            lines.append(line)
+
+    if not lines:
+        return ""
+
+    text = "\n".join(lines)
+    if len(text) <= max_chars:
+        return text
+    return text[: max(max_chars - 32, 0)].rstrip() + "\n- [truncated]"
+
+
+def build_serana_context_bundle(
+    state: dict[str, Any],
+    *,
+    user_input: str | None = None,
+    include_available_tools: bool = True,
+) -> SeranaContextBundle:
+    resolved_user_input = (user_input or get_primary_user_input(state)).strip()
+    raw_skill_names = state.get("instruction_skill_names") or []
+    skill_names = tuple(str(name) for name in raw_skill_names if str(name).strip())
+    return SeranaContextBundle(
+        user_input=resolved_user_input,
+        persona=load_serana_persona(),
+        resident_memory_context=str(state.get("resident_memory_context") or ""),
+        working_memory_context=str(state.get("working_memory_context") or ""),
+        memory_context=str(state.get("memory_context") or ""),
+        instruction_skill_context=str(state.get("instruction_skill_context") or ""),
+        instruction_skill_names=skill_names,
+        runtime_context=_build_runtime_context(state),
+        available_tool_context=build_available_tool_context() if include_available_tools else "",
+    )
+
+
+def build_state_system_prompt(
+    state: dict[str, Any],
+    task_instruction: str,
+    *,
+    include_instruction_skills: bool | None = None,
+    include_available_tools: bool = False,
+    include_runtime: bool = False,
+) -> str:
+    return build_serana_context_bundle(
+        state,
+        include_available_tools=include_available_tools,
+    ).build_system_prompt(
+        task_instruction,
+        include_instruction_skills=include_instruction_skills,
+        include_available_tools=include_available_tools,
+        include_runtime=include_runtime,
+    )
 
 
 def build_state_request_context(
@@ -74,15 +238,25 @@ def build_state_request_context(
     *,
     user_input: str | None = None,
     label: str = "User message",
+    include_resident_memory: bool = True,
+    include_working_memory: bool = True,
+    include_memory: bool = True,
+    include_instruction_skills: bool = True,
+    include_runtime: bool = False,
+    include_available_tools: bool = False,
 ) -> str:
-    resolved_user_input = (user_input or get_primary_user_input(state)).strip()
-    return build_contextual_request(
-        resolved_user_input,
-        resident_memory_context=str(state.get("resident_memory_context") or ""),
-        working_memory_context=str(state.get("working_memory_context") or ""),
-        memory_context=str(state.get("memory_context") or ""),
-        instruction_skill_context=str(state.get("instruction_skill_context") or ""),
+    return build_serana_context_bundle(
+        state,
+        user_input=user_input,
+        include_available_tools=include_available_tools,
+    ).build_request_context(
         label=label,
+        include_resident_memory=include_resident_memory,
+        include_working_memory=include_working_memory,
+        include_memory=include_memory,
+        include_instruction_skills=include_instruction_skills,
+        include_runtime=include_runtime,
+        include_available_tools=include_available_tools,
     )
 
 

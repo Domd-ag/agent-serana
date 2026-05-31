@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from app.approvals import get_approval_manager
 from app.core import get_settings
 from app.core.logger import configure_logging, get_logger
 from app.core.init_db import main as init_db_main
@@ -28,11 +29,17 @@ async def lifespan(app: FastAPI):
     startup_logger.info("Starting Serana backend")
     await init_db_main()
     initialize_serana_persona()
-    SkillManager().ensure_initialized()
+    skill_manager = SkillManager()
+    skill_manager.ensure_initialized()
+    approval_manager = get_approval_manager()
 
     startup_logger.info("Serana backend started successfully")
-    yield
-    startup_logger.info("Shutting down Serana backend")
+    try:
+        yield
+    finally:
+        startup_logger.info("Shutting down Serana backend")
+        await approval_manager.shutdown()
+        await skill_manager.shutdown()
 
 
 app = FastAPI(
@@ -44,7 +51,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

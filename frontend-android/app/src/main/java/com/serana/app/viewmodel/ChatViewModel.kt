@@ -2,6 +2,9 @@ package com.serana.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.serana.app.data.api.ApprovalDecisionRequest
+import com.serana.app.data.api.ApprovalRequestDto
+import com.serana.app.data.api.ApprovalResponseDto
 import com.serana.app.data.api.AuditInsightsDto
 import com.serana.app.data.api.ChatStreamEvent
 import com.serana.app.data.api.ChatCompletionResponseDto
@@ -12,6 +15,7 @@ import com.serana.app.data.api.SendMessageRequest
 import com.serana.app.data.api.ThinkingBlockDto
 import com.serana.app.data.api.ToolCallDto
 import com.serana.app.data.models.Message
+import com.serana.app.data.models.ApprovalRequest
 import com.serana.app.data.models.Role
 import com.serana.app.data.models.StreamStatus
 import com.serana.app.data.models.ThinkingBlock
@@ -82,6 +86,12 @@ class ChatViewModel : ViewModel() {
     private val _isClearingSessions = MutableStateFlow(false)
     val isClearingSessions: StateFlow<Boolean> = _isClearingSessions.asStateFlow()
 
+    private val _pendingApproval = MutableStateFlow<ApprovalRequest?>(null)
+    val pendingApproval: StateFlow<ApprovalRequest?> = _pendingApproval.asStateFlow()
+
+    private val _isSubmittingApproval = MutableStateFlow(false)
+    val isSubmittingApproval: StateFlow<Boolean> = _isSubmittingApproval.asStateFlow()
+
     private var currentSessionId: String? = null
     private val messageUpdateMutex = Mutex()
 
@@ -114,6 +124,7 @@ class ChatViewModel : ViewModel() {
     fun loadSession(sessionId: String) {
         _isLoading.value = true
         _error.value = null
+        _pendingApproval.value = null
         viewModelScope.launch {
             try {
                 val messagesResponse = withContext(Dispatchers.IO) {
@@ -145,6 +156,7 @@ class ChatViewModel : ViewModel() {
         _executionMode.value = "direct"
         _debugSummary.value = ChatDebugSummary()
         _error.value = null
+        _pendingApproval.value = null
         _messages.value = newChatMessages()
     }
 
@@ -212,10 +224,13 @@ class ChatViewModel : ViewModel() {
                         when (event) {
                             is ChatStreamEvent.ThinkingBlock -> appendThinkingBlock(assistantMessageId, event.block)
                             is ChatStreamEvent.Content -> appendAssistantContent(assistantMessageId, event.chunk)
+                            is ChatStreamEvent.ApprovalRequested -> showApprovalRequest(assistantMessageId, event.request)
+                            is ChatStreamEvent.ApprovalResolved -> handleApprovalResolved(assistantMessageId, event.response)
                             is ChatStreamEvent.Done -> {
                                 currentSessionId = event.sessionId.ifBlank { currentSessionId }
                                 _currentSessionId.value = currentSessionId
-                                updateStreamStatus(assistantMessageId, StreamStatus.FINALIZED)
+                                _pendingApproval.value = null
+                                applyStreamDone(assistantMessageId, event)
                             }
                         }
                     }
@@ -245,6 +260,38 @@ class ChatViewModel : ViewModel() {
 
     fun clearError() {
         _error.value = null
+    }
+
+    fun respondToApproval(
+        requestId: String,
+        approved: Boolean,
+        approvalScope: String = "once",
+    ) {
+        if (_isSubmittingApproval.value) return
+
+        viewModelScope.launch {
+            _isSubmittingApproval.value = true
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.submitApprovalDecision(
+                        requestId = requestId,
+                        request = ApprovalDecisionRequest(
+                            requestId = requestId,
+                            approved = approved,
+                            approvalScope = approvalScope,
+                        ),
+                    )
+                }
+                if (!response.isSuccessful || response.body() == null) {
+                    throw IllegalStateException("审批提交失败")
+                }
+                _pendingApproval.value = null
+            } catch (e: Exception) {
+                _error.value = e.message ?: "审批提交失败"
+            } finally {
+                _isSubmittingApproval.value = false
+            }
+        }
     }
 
     fun deleteSession(sessionId: String) {
@@ -422,6 +469,39 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    private fun showApprovalRequest(messageId: String, request: ApprovalRequestDto) {
+        _pendingApproval.value = mapApprovalRequest(request)
+        updateStreamStatus(messageId, StreamStatus.WAITING_APPROVAL)
+    }
+
+    private fun handleApprovalResolved(messageId: String, response: ApprovalResponseDto) {
+        val current = _pendingApproval.value
+        if (current?.requestId == response.requestId) {
+            _pendingApproval.value = null
+        }
+        updateStreamStatus(messageId, StreamStatus.THINKING)
+    }
+
+    private fun applyStreamDone(messageId: String, event: ChatStreamEvent.Done) {
+        val streamedThinkingBlocks = event.thinkingBlocks.map(::mapThinkingBlock)
+        val streamedToolCalls = event.toolCalls.map(::mapToolCall)
+        _messages.value = _messages.value.map { message ->
+            if (message.id != messageId) {
+                message
+            } else {
+                val knownThinkingBlockIds = message.thinkingBlocks.map { it.id }.toSet()
+                val knownToolCallIds = message.toolCalls.map { it.id }.toSet()
+                message.copy(
+                    thinkingBlocks = message.thinkingBlocks +
+                        streamedThinkingBlocks.filterNot { it.id in knownThinkingBlockIds },
+                    toolCalls = message.toolCalls +
+                        streamedToolCalls.filterNot { it.id in knownToolCallIds },
+                    streamStatus = StreamStatus.FINALIZED,
+                )
+            }
+        }
+    }
+
     private suspend fun hydrateAssistantFromDebug(sessionId: String, messageId: String) {
         val debugResponse = withContext(Dispatchers.IO) {
             RetrofitClient.apiService.getChatDebug(sessionId)
@@ -487,6 +567,24 @@ private fun mapThinkingBlock(dto: ThinkingBlockDto): ThinkingBlock {
 
 private fun Message.withStreamStatus(status: StreamStatus): Message {
     return copy(streamStatus = status)
+}
+
+private fun mapApprovalRequest(dto: ApprovalRequestDto): ApprovalRequest {
+    return ApprovalRequest(
+        requestId = dto.requestId,
+        sessionId = dto.sessionId,
+        toolName = dto.toolName,
+        operation = dto.operation,
+        riskLevel = dto.riskLevel,
+        title = dto.title,
+        summary = dto.summary,
+        reason = dto.reason,
+        approvalOptions = dto.approvalOptions,
+        details = dto.details,
+        status = dto.status,
+        createdAt = dto.createdAt,
+        expiresAt = dto.expiresAt,
+    )
 }
 
 private fun mapToolCall(dto: ToolCallDto): ToolTrace {

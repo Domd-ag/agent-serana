@@ -7,9 +7,11 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "Serana Backend"
     APP_VERSION: str = "0.1.0"
+    ENVIRONMENT: str = "local"
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     SQL_ECHO: bool = False
+    CORS_ALLOW_ORIGINS: str = "*"
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./serana.db"
@@ -28,6 +30,18 @@ class Settings(BaseSettings):
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+
+    # Marketplace
+    CLAWHUB_BASE_URL: str = "https://clawhub.ai"
+
+    def cors_allow_origins(self) -> list[str]:
+        if self.CORS_ALLOW_ORIGINS.strip() == "*":
+            return ["*"]
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOW_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     class Config:
         env_file = ".env"

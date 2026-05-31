@@ -1,5 +1,10 @@
 ﻿package com.serana.app.ui.screens
 
+import android.annotation.SuppressLint
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
@@ -7,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +26,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -27,9 +35,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -68,6 +79,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,22 +88,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.serana.app.data.api.RetrofitClient
 import com.serana.app.data.models.ChatSession
 import com.serana.app.data.models.LlmMode
 import com.serana.app.data.models.Message
+import com.serana.app.data.models.ApprovalRequest
 import com.serana.app.data.models.MarketplaceSkill
 import com.serana.app.data.models.Role
 import com.serana.app.data.models.SkillPackage
 import com.serana.app.data.models.StreamStatus
+import com.serana.app.data.models.ThinkingBlock
+import com.serana.app.data.models.ToolTrace
 import com.serana.app.viewmodel.ChatViewModel
 import com.serana.app.viewmodel.SettingsViewModel
 import com.serana.app.viewmodel.SkillsViewModel
@@ -113,11 +138,48 @@ fun ChatScreen(
     val currentSessionId by viewModel.activeSessionId.collectAsState()
     val deletingSessionIds by viewModel.deletingSessionIds.collectAsState()
     val isClearingSessions by viewModel.isClearingSessions.collectAsState()
+    val pendingApproval by viewModel.pendingApproval.collectAsState()
+    val isSubmittingApproval by viewModel.isSubmittingApproval.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var showSkillsDialog by rememberSaveable { mutableStateOf(false) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    var activeHtmlPreviewTitle by rememberSaveable { mutableStateOf("") }
+    var activeHtmlPreviewUrl by rememberSaveable { mutableStateOf<String?>(null) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val messageListState = rememberLazyListState()
+    val bottomAnchorIndex = 1 + (if (error != null) 1 else 0) + messages.size + (if (isLoading) 1 else 0)
+    val latestMessage = messages.lastOrNull()
+    val isAssistantBusy = isLoading || messages.any {
+        it.role == Role.ASSISTANT && it.streamStatus in setOf(
+            StreamStatus.THINKING,
+            StreamStatus.STREAMING,
+            StreamStatus.RETRYING,
+            StreamStatus.WAITING_APPROVAL,
+        )
+    }
+    var lastAutoScrollSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    val shouldAutoFollowLatest by remember(messageListState, bottomAnchorIndex) {
+        derivedStateOf { isNearBottom(messageListState, bottomAnchorIndex) }
+    }
+
+    LaunchedEffect(
+        currentSessionId,
+        latestMessage?.id,
+        latestMessage?.content,
+        latestMessage?.streamStatus,
+        isLoading,
+        error,
+    ) {
+        val sessionChanged = currentSessionId != lastAutoScrollSessionId
+        if (sessionChanged) {
+            lastAutoScrollSessionId = currentSessionId
+        }
+
+        if (bottomAnchorIndex >= 0 && (sessionChanged || shouldAutoFollowLatest)) {
+            messageListState.scrollToItem(bottomAnchorIndex)
+        }
+    }
 
     if (showSkillsDialog) {
         SkillsOverlayDialog(onDismiss = { showSkillsDialog = false })
@@ -125,6 +187,27 @@ fun ChatScreen(
 
     if (showSettingsDialog) {
         SettingsOverlayDialog(onDismiss = { showSettingsDialog = false })
+    }
+
+    activeHtmlPreviewUrl?.let { previewUrl ->
+        HtmlPreviewDialog(
+            title = activeHtmlPreviewTitle.ifBlank { "演示预览" },
+            url = previewUrl,
+            onDismiss = {
+                activeHtmlPreviewUrl = null
+                activeHtmlPreviewTitle = ""
+            },
+        )
+    }
+
+    pendingApproval?.let { approval ->
+        ApprovalDialog(
+            request = approval,
+            isSubmitting = isSubmittingApproval,
+            onApproveOnce = { viewModel.respondToApproval(approval.requestId, true, "once") },
+            onApproveAlways = { viewModel.respondToApproval(approval.requestId, true, "always") },
+            onDeny = { viewModel.respondToApproval(approval.requestId, false) },
+        )
     }
 
     ModalNavigationDrawer(
@@ -160,21 +243,22 @@ fun ChatScreen(
     ) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
-        ) { paddingValues ->
+        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
+                    .fillMaxSize(),
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize(),
+                        .fillMaxSize()
+                        .imePadding(),
                 ) {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .padding(horizontal = 14.dp),
+                        state = messageListState,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         item {
@@ -198,6 +282,10 @@ fun ChatScreen(
                             MessageBubble(
                                 message = message,
                                 retrySourceContent = previousUserContent,
+                                onOpenHtmlPreview = { artifact ->
+                                    activeHtmlPreviewTitle = artifact.title
+                                    activeHtmlPreviewUrl = artifact.url
+                                },
                                 onRetry = { content, assistantId ->
                                     viewModel.retryAssistantMessage(content, assistantId)
                                 },
@@ -224,13 +312,21 @@ fun ChatScreen(
                                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
                                         )
                                         Text(
-                                            text = "Serana 正在整理回复…",
+                                            text = if (pendingApproval != null) {
+                                                "Serana 正在等待你的确认…"
+                                            } else {
+                                                "Serana 正在整理回复…"
+                                            },
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                     }
                                 }
                             }
+                        }
+
+                        item(key = "chat-bottom-anchor") {
+                            Spacer(modifier = Modifier.height(4.dp))
                         }
                     }
                     MessageInput(
@@ -246,6 +342,7 @@ fun ChatScreen(
 
                 FloatingHeader(
                     modifier = Modifier.align(Alignment.TopCenter),
+                    isAssistantBusy = isAssistantBusy,
                     onOpenMenu = { scope.launch { drawerState.open() } },
                     onNewChat = { viewModel.startNewChat() },
                 )
@@ -257,6 +354,7 @@ fun ChatScreen(
 @Composable
 private fun FloatingHeader(
     modifier: Modifier = Modifier,
+    isAssistantBusy: Boolean,
     onOpenMenu: () -> Unit,
     onNewChat: () -> Unit,
 ) {
@@ -283,12 +381,26 @@ private fun FloatingHeader(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
                 tonalElevation = 1.dp,
             ) {
-                Text(
-                    text = "Serana",
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Row(
+                    modifier = Modifier
+                        .animateContentSize()
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Serana",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    AnimatedVisibility(visible = isAssistantBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(10.dp),
+                            strokeWidth = 1.4.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
         }
 
@@ -622,6 +734,16 @@ private fun DrawerMenuPanel(
             }
         }
     }
+}
+
+private fun isNearBottom(
+    listState: LazyListState,
+    bottomAnchorIndex: Int,
+    threshold: Int = 2,
+): Boolean {
+    if (bottomAnchorIndex <= 0) return true
+    val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return true
+    return lastVisibleIndex >= (bottomAnchorIndex - threshold).coerceAtLeast(0)
 }
 
 @Composable
@@ -1248,6 +1370,7 @@ private fun SkillSourceSelector(
 private fun MessageBubble(
     message: Message,
     retrySourceContent: String?,
+    onOpenHtmlPreview: (BrowserArtifact) -> Unit,
     onRetry: (String, String) -> Unit,
 ) {
     val isUser = message.role == Role.USER
@@ -1255,7 +1378,7 @@ private fun MessageBubble(
     val isWelcomeNote = !isUser && (
         message.content == "New chat started. Send a message when you are ready." ||
             message.content == "新的对话已准备好，随时告诉 Serana 你想做什么。"
-        )
+    )
     val backgroundColor = when {
         isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.88f)
         isWelcomeNote -> MaterialTheme.colorScheme.surface.copy(alpha = if (isDarkTheme) 0.96f else 0.62f)
@@ -1271,12 +1394,25 @@ private fun MessageBubble(
         StreamStatus.STREAMING,
         StreamStatus.RETRYING,
     )
-    var showFinalizedBadge by rememberSaveable(message.id, message.streamStatus) { mutableStateOf(false) }
+    val browserArtifacts = remember(message.toolCalls) { extractBrowserArtifacts(message) }
+    val executionSteps = remember(message.thinkingBlocks, message.toolCalls, message.streamStatus) {
+        buildExecutionSteps(message)
+    }
+    var showFinalizedBadge by rememberSaveable(message.id) { mutableStateOf(false) }
+    var lastObservedStatus by rememberSaveable(message.id) { mutableStateOf(message.streamStatus.name) }
 
     LaunchedEffect(message.id, message.streamStatus) {
-        showFinalizedBadge = message.streamStatus == StreamStatus.FINALIZED
-        if (message.streamStatus == StreamStatus.FINALIZED) {
+        val transitionedToFinalized =
+            message.streamStatus == StreamStatus.FINALIZED &&
+                lastObservedStatus != StreamStatus.FINALIZED.name
+
+        lastObservedStatus = message.streamStatus.name
+
+        if (transitionedToFinalized) {
+            showFinalizedBadge = true
             delay(1800)
+            showFinalizedBadge = false
+        } else if (message.streamStatus != StreamStatus.FINALIZED) {
             showFinalizedBadge = false
         }
     }
@@ -1285,66 +1421,68 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(
-                when {
-                    isUser -> 0.76f
-                    isWelcomeNote -> 0.84f
-                    else -> 0.92f
-                },
-            ),
-            shape = RoundedCornerShape(
-                topStart = 18.dp,
-                topEnd = 18.dp,
-                bottomStart = if (isUser) 18.dp else if (isWelcomeNote) 18.dp else 8.dp,
-                bottomEnd = if (isUser) 8.dp else 18.dp,
-            ),
-            color = backgroundColor,
-            shadowElevation = when {
-                isUser -> 0.dp
-                isWelcomeNote -> 0.dp
-                else -> 1.dp
-            },
-            border = if (isUser) {
-                null
-            } else if (isWelcomeNote) {
-                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f))
-            } else {
-                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f))
-            },
-        ) {
-            Column(
-                modifier = Modifier.padding(
-                    horizontal = if (isWelcomeNote) 13.dp else 14.dp,
-                    vertical = if (isWelcomeNote) 10.dp else 11.dp,
+        if (isUser || isWelcomeNote) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(
+                    when {
+                        isUser -> 0.76f
+                        else -> 0.84f
+                    },
                 ),
-                verticalArrangement = Arrangement.spacedBy(if (isWelcomeNote) 6.dp else 8.dp),
+                shape = RoundedCornerShape(
+                    topStart = 18.dp,
+                    topEnd = 18.dp,
+                    bottomStart = 18.dp,
+                    bottomEnd = if (isUser) 8.dp else 18.dp,
+                ),
+                color = backgroundColor,
+                shadowElevation = 0.dp,
+                border = if (isUser) {
+                    null
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f))
+                },
             ) {
-                Text(
-                    text = message.content.ifBlank { if (activeStreaming) " " else "" },
-                    color = textColor,
-                    style = (if (isWelcomeNote) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium).copy(
-                        lineHeight = if (isWelcomeNote) 20.sp else 22.sp,
-                        letterSpacing = 0.sp,
-                    ),
+                MessageContentColumn(
+                    message = message,
+                    textColor = textColor,
+                    isWelcomeNote = isWelcomeNote,
+                    activeStreaming = activeStreaming,
+                    browserArtifacts = browserArtifacts,
+                    onOpenHtmlPreview = onOpenHtmlPreview,
                 )
-                if (activeStreaming) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 1.8.dp,
-                            color = if (isUser) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.primary,
-                        )
-                    }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (executionSteps.isNotEmpty()) {
+                    ExecutionSummary(
+                        steps = executionSteps,
+                        activeStreaming = activeStreaming,
+                    )
+                }
+                if (message.content.isNotBlank()) {
+                    LightweightMarkdownText(
+                        text = message.content,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                } else if (activeStreaming) {
+                    StreamingDots()
+                }
+                browserArtifacts.forEach { artifact ->
+                    BrowserArtifactCard(
+                        artifact = artifact,
+                        onOpenHtmlPreview = onOpenHtmlPreview,
+                    )
                 }
                 if (message.timestamp.isNotBlank()) {
                     Text(
                         text = message.timestamp.take(19).replace("T", " "),
-                        color = textColor.copy(alpha = 0.56f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.56f),
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1354,6 +1492,11 @@ private fun MessageBubble(
         if (!isUser && showFinalizedBadge) {
             Spacer(modifier = Modifier.height(6.dp))
             StatusPill("已完成", MaterialTheme.colorScheme.secondary)
+        }
+
+        if (!isUser && message.streamStatus == StreamStatus.WAITING_APPROVAL) {
+            Spacer(modifier = Modifier.height(6.dp))
+            StatusPill("等待确认", MaterialTheme.colorScheme.primary)
         }
 
         if (!isUser && message.streamStatus == StreamStatus.FAILED) {
@@ -1377,6 +1520,964 @@ private fun MessageBubble(
 }
 
 @Composable
+private fun MessageContentColumn(
+    message: Message,
+    textColor: Color,
+    isWelcomeNote: Boolean,
+    activeStreaming: Boolean,
+    browserArtifacts: List<BrowserArtifact>,
+    onOpenHtmlPreview: (BrowserArtifact) -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(
+            horizontal = if (isWelcomeNote) 13.dp else 14.dp,
+            vertical = if (isWelcomeNote) 10.dp else 11.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(if (isWelcomeNote) 6.dp else 8.dp),
+    ) {
+        Text(
+            text = message.content.ifBlank { if (activeStreaming) " " else "" },
+            color = textColor,
+            style = (if (isWelcomeNote) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium).copy(
+                lineHeight = if (isWelcomeNote) 20.sp else 22.sp,
+                letterSpacing = 0.sp,
+            ),
+        )
+        browserArtifacts.forEach { artifact ->
+            BrowserArtifactCard(
+                artifact = artifact,
+                onOpenHtmlPreview = onOpenHtmlPreview,
+            )
+        }
+        if (activeStreaming) {
+            StreamingDots(color = textColor.copy(alpha = 0.9f))
+        }
+        if (message.timestamp.isNotBlank()) {
+            Text(
+                text = message.timestamp.take(19).replace("T", " "),
+                color = textColor.copy(alpha = 0.56f),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+private enum class ExecutionStepStatus {
+    RUNNING,
+    DONE,
+    FAILED,
+}
+
+private data class ExecutionStep(
+    val label: String,
+    val summary: String,
+    val status: ExecutionStepStatus,
+)
+
+@Composable
+private fun ExecutionSummary(
+    steps: List<ExecutionStep>,
+    activeStreaming: Boolean,
+) {
+    var expanded by rememberSaveable(steps.joinToString("|") { "${it.label}:${it.status}" }) {
+        mutableStateOf(false)
+    }
+    val activeStep = steps.lastOrNull { it.status == ExecutionStepStatus.RUNNING }
+        ?: steps.lastOrNull()
+    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (expanded) "收起执行过程" else "展开执行过程",
+                tint = mutedColor.copy(alpha = 0.52f),
+                modifier = Modifier.size(18.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(15.dp)
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                steps.forEach { step ->
+                    ExecutionCapsule(step.status)
+                }
+            }
+        }
+
+        if (!expanded && activeStep != null) {
+            Text(
+                text = activeStep.summary.ifBlank {
+                    if (activeStreaming) "Serana 正在处理…" else activeStep.label
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = mutedColor.copy(alpha = 0.68f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 28.dp),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 28.dp, top = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                steps.forEach { step ->
+                    ExecutionDetailRow(step)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExecutionCapsule(status: ExecutionStepStatus) {
+    val color = when (status) {
+        ExecutionStepStatus.RUNNING -> MaterialTheme.colorScheme.primary
+        ExecutionStepStatus.DONE -> Color(0xFF22A06B)
+        ExecutionStepStatus.FAILED -> MaterialTheme.colorScheme.error
+    }
+    Box(
+        modifier = Modifier
+            .width(5.dp)
+            .height(if (status == ExecutionStepStatus.RUNNING) 13.dp else 9.dp)
+            .background(color.copy(alpha = if (status == ExecutionStepStatus.RUNNING) 0.95f else 0.78f), RoundedCornerShape(999.dp)),
+    )
+}
+
+@Composable
+private fun ExecutionDetailRow(step: ExecutionStep) {
+    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 22.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 7.dp)
+                .size(6.dp)
+                .background(
+                    color = when (step.status) {
+                        ExecutionStepStatus.RUNNING -> MaterialTheme.colorScheme.primary
+                        ExecutionStepStatus.DONE -> Color(0xFF22A06B)
+                        ExecutionStepStatus.FAILED -> MaterialTheme.colorScheme.error
+                    },
+                    shape = CircleShape,
+                ),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(
+                text = step.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (step.summary.isNotBlank()) {
+                Text(
+                    text = step.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = mutedColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamingDots(
+    color: Color = MaterialTheme.colorScheme.primary,
+) {
+    Row(
+        modifier = Modifier.padding(top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            strokeWidth = 1.8.dp,
+            color = color,
+        )
+        Text(
+            text = "处理中…",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
+    if (message.role == Role.USER) return emptyList()
+    val steps = mutableListOf<ExecutionStep>()
+    message.thinkingBlocks.forEach { block ->
+        steps += ExecutionStep(
+            label = block.title.ifBlank { "思考" },
+            summary = block.content.take(96),
+            status = if (message.streamStatus == StreamStatus.THINKING) {
+                ExecutionStepStatus.RUNNING
+            } else {
+                ExecutionStepStatus.DONE
+            },
+        )
+    }
+    message.toolCalls
+        .filter(::shouldShowExecutionTool)
+        .forEach { trace ->
+            steps += ExecutionStep(
+                label = toolDisplayName(trace),
+                summary = toolSummary(trace),
+                status = when (trace.status.lowercase()) {
+                    "failed", "error" -> ExecutionStepStatus.FAILED
+                    "running", "pending" -> ExecutionStepStatus.RUNNING
+                    else -> ExecutionStepStatus.DONE
+                },
+            )
+        }
+    if (steps.isEmpty() && message.streamStatus in setOf(StreamStatus.THINKING, StreamStatus.STREAMING, StreamStatus.RETRYING)) {
+        steps += ExecutionStep(
+            label = "Serana",
+            summary = when (message.streamStatus) {
+                StreamStatus.THINKING -> "正在理解你的问题…"
+                StreamStatus.RETRYING -> "正在重新请求…"
+                else -> "正在整理回复…"
+            },
+            status = ExecutionStepStatus.RUNNING,
+        )
+    }
+    return steps
+}
+
+private fun shouldShowExecutionTool(trace: ToolTrace): Boolean {
+    val name = trace.name.lowercase()
+    return name !in setOf(
+        "assistant_generation",
+        "conversation_route",
+        "serana_loop_stage",
+        "serana_tool_selection",
+        "serana_policy_gate",
+    ) && !name.startsWith("serana_approval")
+}
+
+private fun toolDisplayName(trace: ToolTrace): String {
+    val name = trace.name.lowercase()
+    return when {
+        name.contains("create_html_preview") -> "生成演示"
+        name.contains("browser") -> "浏览器"
+        name.contains("weather") -> "查询天气"
+        name.contains("calculator") -> "计算"
+        name.contains("time_manager") -> "查询时间"
+        name.contains("memory") -> "整理记忆"
+        name.contains("skill") -> "技能"
+        else -> trace.name.substringAfterLast('.').replace('_', ' ').ifBlank { "工具" }
+    }
+}
+
+private fun toolSummary(trace: ToolTrace): String {
+    val output = trace.output as? Map<*, *>
+    val standardResult = output?.get("tool_result") as? Map<*, *>
+    val userSummary = standardResult?.get("user_summary")?.toString()?.takeIf { it.isNotBlank() }
+    if (!userSummary.isNullOrBlank()) return userSummary.take(120)
+    val summary = output?.get("summary")?.toString()?.takeIf { it.isNotBlank() }
+    if (!summary.isNullOrBlank()) return summary.take(120)
+    return when (trace.status.lowercase()) {
+        "failed", "error" -> "执行失败"
+        "running", "pending" -> "正在执行…"
+        else -> "已完成"
+    }
+}
+
+private enum class MarkdownBlockKind {
+    PARAGRAPH,
+    HEADING,
+    BULLET,
+    NUMBERED,
+    CODE,
+    QUOTE,
+}
+
+private data class MarkdownBlock(
+    val kind: MarkdownBlockKind,
+    val text: String,
+    val number: Int? = null,
+)
+
+@Composable
+private fun LightweightMarkdownText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val blocks = remember(text) { parseMarkdownBlocks(text) }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        blocks.forEach { block ->
+            when (block.kind) {
+                MarkdownBlockKind.HEADING -> InlineMarkdownText(
+                    text = block.text,
+                    style = MaterialTheme.typography.titleSmall.copy(letterSpacing = 0.sp),
+                    color = color,
+                    fontWeight = FontWeight.SemiBold,
+                )
+
+                MarkdownBlockKind.PARAGRAPH -> InlineMarkdownText(
+                    text = block.text,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        lineHeight = 23.sp,
+                        letterSpacing = 0.sp,
+                    ),
+                    color = color,
+                )
+
+                MarkdownBlockKind.BULLET -> MarkdownListRow(
+                    marker = "•",
+                    text = block.text,
+                    color = color,
+                )
+
+                MarkdownBlockKind.NUMBERED -> MarkdownListRow(
+                    marker = "${block.number ?: 1}.",
+                    text = block.text,
+                    color = color,
+                )
+
+                MarkdownBlockKind.CODE -> CodeBlock(text = block.text)
+
+                MarkdownBlockKind.QUOTE -> QuoteBlock(
+                    text = block.text,
+                    color = color,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownListRow(
+    marker: String,
+    text: String,
+    color: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = marker,
+            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.width(20.dp),
+        )
+        InlineMarkdownText(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                lineHeight = 23.sp,
+                letterSpacing = 0.sp,
+            ),
+            color = color,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun QuoteBlock(
+    text: String,
+    color: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .heightIn(min = 22.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.42f), RoundedCornerShape(999.dp)),
+        )
+        Surface(
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+        ) {
+            InlineMarkdownText(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    lineHeight = 23.sp,
+                    letterSpacing = 0.sp,
+                ),
+                color = color.copy(alpha = 0.86f),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun InlineMarkdownText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight? = null,
+) {
+    val codeBackground = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f)
+    val annotated = remember(text, color, codeBackground) {
+        buildInlineMarkdown(text, color, codeBackground)
+    }
+    Text(
+        text = annotated,
+        style = style,
+        fontWeight = fontWeight,
+        color = color,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun CodeBlock(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f)),
+    ) {
+        Text(
+            text = text.trimEnd(),
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+                lineHeight = 20.sp,
+                letterSpacing = 0.sp,
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        )
+    }
+}
+
+private fun parseMarkdownBlocks(source: String): List<MarkdownBlock> {
+    val blocks = mutableListOf<MarkdownBlock>()
+    val paragraph = mutableListOf<String>()
+    val code = mutableListOf<String>()
+    var inCode = false
+
+    fun flushParagraph() {
+        if (paragraph.isNotEmpty()) {
+            blocks += MarkdownBlock(
+                kind = MarkdownBlockKind.PARAGRAPH,
+                text = paragraph.joinToString(" ").trim(),
+            )
+            paragraph.clear()
+        }
+    }
+
+    source.lines().forEach { rawLine ->
+        val line = rawLine.trimEnd()
+        val trimmed = line.trim()
+
+        if (trimmed.startsWith("```")) {
+            if (inCode) {
+                blocks += MarkdownBlock(MarkdownBlockKind.CODE, code.joinToString("\n"))
+                code.clear()
+                inCode = false
+            } else {
+                flushParagraph()
+                inCode = true
+            }
+            return@forEach
+        }
+
+        if (inCode) {
+            code += rawLine
+            return@forEach
+        }
+
+        if (trimmed.isBlank()) {
+            flushParagraph()
+            return@forEach
+        }
+
+        val heading = Regex("^#{1,3}\\s+(.+)$").find(trimmed)
+        if (heading != null) {
+            flushParagraph()
+            blocks += MarkdownBlock(MarkdownBlockKind.HEADING, heading.groupValues[1].trim())
+            return@forEach
+        }
+
+        val bullet = Regex("^[-*•]\\s+(.+)$").find(trimmed)
+        if (bullet != null) {
+            flushParagraph()
+            blocks += MarkdownBlock(MarkdownBlockKind.BULLET, bullet.groupValues[1].trim())
+            return@forEach
+        }
+
+        val numbered = Regex("^(\\d+)[.)]\\s+(.+)$").find(trimmed)
+        if (numbered != null) {
+            flushParagraph()
+            blocks += MarkdownBlock(
+                kind = MarkdownBlockKind.NUMBERED,
+                text = numbered.groupValues[2].trim(),
+                number = numbered.groupValues[1].toIntOrNull(),
+            )
+            return@forEach
+        }
+
+        val quote = Regex("^>\\s?(.+)$").find(trimmed)
+        if (quote != null) {
+            flushParagraph()
+            blocks += MarkdownBlock(MarkdownBlockKind.QUOTE, quote.groupValues[1].trim())
+            return@forEach
+        }
+
+        paragraph += trimmed
+    }
+
+    if (inCode && code.isNotEmpty()) {
+        blocks += MarkdownBlock(MarkdownBlockKind.CODE, code.joinToString("\n"))
+    }
+    flushParagraph()
+    return blocks.ifEmpty { listOf(MarkdownBlock(MarkdownBlockKind.PARAGRAPH, source)) }
+}
+
+private fun buildInlineMarkdown(
+    source: String,
+    color: Color,
+    codeBackground: Color,
+): AnnotatedString {
+    return buildAnnotatedString {
+        var index = 0
+        while (index < source.length) {
+            when {
+                source.startsWith("`", index) -> {
+                    val end = source.indexOf('`', startIndex = index + 1)
+                    if (end > index) {
+                        withStyle(
+                            SpanStyle(
+                                color = color,
+                                background = codeBackground,
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                        ) {
+                            append(source.substring(index + 1, end))
+                        }
+                        index = end + 1
+                    } else {
+                        append(source[index])
+                        index += 1
+                    }
+                }
+
+                source.startsWith("**", index) || source.startsWith("__", index) -> {
+                    val marker = source.substring(index, index + 2)
+                    val end = source.indexOf(marker, startIndex = index + 2)
+                    if (end > index) {
+                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                            append(source.substring(index + 2, end))
+                        }
+                        index = end + 2
+                    } else {
+                        append(source[index])
+                        index += 1
+                    }
+                }
+
+                else -> {
+                    append(source[index])
+                    index += 1
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApprovalDialog(
+    request: ApprovalRequest,
+    isSubmitting: Boolean,
+    onApproveOnce: () -> Unit,
+    onApproveAlways: () -> Unit,
+    onDeny: () -> Unit,
+) {
+    val canApproveAlways = request.approvalOptions.contains("always")
+    AlertDialog(
+        onDismissRequest = {},
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canApproveAlways) {
+                    TextButton(
+                        onClick = onApproveAlways,
+                        enabled = !isSubmitting,
+                    ) {
+                        Text("持续允许")
+                    }
+                }
+                Button(
+                    onClick = onApproveOnce,
+                    enabled = !isSubmitting,
+                ) {
+                    Text(if (isSubmitting) "提交中…" else "本次允许")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDeny,
+                enabled = !isSubmitting,
+            ) {
+                Text("拒绝")
+            }
+        },
+        title = {
+            Text(text = request.title)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = request.summary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                request.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                    Text(
+                        text = reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                StatusPill(
+                    label = when (request.riskLevel.lowercase()) {
+                        "high" -> "高风险"
+                        "medium" -> "中风险"
+                        else -> "低风险"
+                    },
+                    color = when (request.riskLevel.lowercase()) {
+                        "high" -> MaterialTheme.colorScheme.error
+                        "medium" -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.secondary
+                    },
+                )
+                approvalDetailRows(request).forEach { (label, value) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = value,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
+private enum class BrowserArtifactKind {
+    IMAGE,
+    HTML_PREVIEW,
+    FILE,
+}
+
+private data class BrowserArtifact(
+    val kind: BrowserArtifactKind,
+    val title: String,
+    val label: String,
+    val description: String,
+    val url: String,
+)
+
+private fun extractBrowserArtifacts(message: Message): List<BrowserArtifact> {
+    if (message.role == Role.USER) return emptyList()
+
+    return message.toolCalls.mapNotNull { trace ->
+        val output = trace.output as? Map<*, *> ?: return@mapNotNull null
+        val standardResult = output["tool_result"] as? Map<*, *>
+        val artifact = (standardResult?.get("artifact") as? Map<*, *>)
+            ?: (output["artifact"] as? Map<*, *>)
+        val artifactUrl = artifact?.get("download_url")?.toString()?.takeIf { it.isNotBlank() }
+            ?: output["artifact_url"]?.toString()?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        val kind = when (artifact?.get("kind")?.toString()) {
+            "image" -> BrowserArtifactKind.IMAGE
+            "html_preview" -> BrowserArtifactKind.HTML_PREVIEW
+            else -> BrowserArtifactKind.FILE
+        }
+        val summary = standardResult?.get("user_summary")?.toString()?.takeIf { it.isNotBlank() }
+            ?: output["summary"]?.toString()?.takeIf { it.isNotBlank() }
+        val title = artifact?.get("title")?.toString()?.takeIf { it.isNotBlank() }
+            ?: artifact?.get("filename")?.toString()?.takeIf { it.isNotBlank() }
+            ?: output["title"]?.toString()?.takeIf { it.isNotBlank() }
+        val label = when (kind) {
+            BrowserArtifactKind.IMAGE -> "查看截图"
+            BrowserArtifactKind.HTML_PREVIEW -> "打开演示"
+            BrowserArtifactKind.FILE -> "打开附件"
+        }
+        val description = summary ?: when (kind) {
+            BrowserArtifactKind.IMAGE -> "点击查看浏览器截图"
+            BrowserArtifactKind.HTML_PREVIEW -> title?.let { "点击打开 $it" } ?: "点击打开演示页面"
+            BrowserArtifactKind.FILE -> title?.let { "点击打开 $it" } ?: "点击打开附件"
+        }
+
+        BrowserArtifact(
+            kind = kind,
+            title = title ?: label,
+            label = label,
+            description = description,
+            url = RetrofitClient.resolveApiUrl(artifactUrl),
+        )
+    }
+}
+
+@Composable
+private fun BrowserArtifactCard(
+    artifact: BrowserArtifact,
+    onOpenHtmlPreview: (BrowserArtifact) -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                if (artifact.kind == BrowserArtifactKind.HTML_PREVIEW) {
+                    onOpenHtmlPreview(artifact)
+                } else {
+                    uriHandler.openUri(artifact.url)
+                }
+            },
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(30.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = when (artifact.kind) {
+                            BrowserArtifactKind.HTML_PREVIEW -> Icons.Filled.AutoAwesome
+                            BrowserArtifactKind.IMAGE,
+                            BrowserArtifactKind.FILE -> Icons.Filled.Visibility
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = artifact.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Text(
+                    text = artifact.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun HtmlPreviewDialog(
+    title: String,
+    url: String,
+    onDismiss: () -> Unit,
+) {
+    var isPageLoading by remember(url) { mutableStateOf(true) }
+    var loadError by remember(url) { mutableStateOf<String?>(null) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.82f),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = "打开演示",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("关闭")
+                    }
+                }
+
+                if (isPageLoading) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = "正在加载演示页面…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                loadError?.let { errorMessage ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                    ) {
+                        Text(
+                            text = errorMessage,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.loadsImagesAutomatically = true
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.setSupportZoom(false)
+                            webChromeClient = WebChromeClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                ): Boolean = false
+
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    isPageLoading = true
+                                    loadError = null
+                                }
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    isPageLoading = false
+                                }
+
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    error: android.webkit.WebResourceError?,
+                                ) {
+                                    if (request?.isForMainFrame == true) {
+                                        isPageLoading = false
+                                        loadError = error?.description?.toString()?.ifBlank {
+                                            "演示页面加载失败。"
+                                        } ?: "演示页面加载失败。"
+                                    }
+                                }
+                            }
+                            loadUrl(url)
+                        }
+                    },
+                    update = { webView ->
+                        if (webView.url != url) {
+                            webView.loadUrl(url)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun StatusPill(
     label: String,
     color: Color,
@@ -1394,6 +2495,28 @@ private fun StatusPill(
     }
 }
 
+private fun approvalDetailRows(request: ApprovalRequest): List<Pair<String, String>> {
+    val details = mutableListOf<Pair<String, String>>()
+    val action = request.details["action"]?.toString()?.takeIf { it.isNotBlank() }
+    val target = request.details["target"]?.toString()?.takeIf { it.isNotBlank() }
+    val filename = request.details["filename"]?.toString()?.takeIf { it.isNotBlank() }
+    val reason = request.details["reason"]?.toString()?.takeIf { it.isNotBlank() }
+
+    if (action != null) {
+        details += "动作" to action
+    }
+    if (target != null) {
+        details += "目标" to target
+    }
+    if (filename != null) {
+        details += "文件" to filename
+    }
+    if (reason != null) {
+        details += "原因" to reason
+    }
+    return details
+}
+
 @Composable
 private fun MessageInput(
     inputText: String,
@@ -1407,8 +2530,8 @@ private fun MessageInput(
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .navigationBarsPadding()
-            .padding(bottom = 6.dp),
-        shape = RoundedCornerShape(20.dp),
+            .padding(bottom = 4.dp),
+        shape = RoundedCornerShape(16.dp),
         color = if (isDarkTheme) {
             MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
         } else {
@@ -1420,7 +2543,7 @@ private fun MessageInput(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(

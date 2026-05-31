@@ -24,6 +24,8 @@
 
 - chat 已经开始优先走轻链路
 - 但部分 direct tool 逻辑仍然残留在旧分支和 fallback 里
+- 2026-05-26 更新：`loop.py` 已抽出 `ConversationLoop` 作为统一 plan-act-escalate 运行时入口；goal 入口也开始复用轻量 direct tool 结果，并保留复杂任务升级保护。
+- 2026-05-26 更新：direct tool 轻链路已拆成 planner、tool intent resolver、shared executor；regex/local fallback 只负责兜底解析安全工具意图，执行统一走 shared executor。
 
 要做的事：
 
@@ -61,6 +63,7 @@
 
 - persona、memory、instruction skills、runtime context 都已经在用
 - 但 prompt 组装仍然稍微有点分散
+- 2026-05-26 更新：`context.py` 已新增 `SeranaContextBundle`，统一组合 persona、resident memory、working memory、dynamic memory、instruction skills、runtime context 和当前可见工具；节点层已开始通过 `build_state_system_prompt(...)` / `build_state_request_context(...)` 使用同一入口。轻量路由阶段只让当前用户消息和 instruction skill 进入 user message，工具清单放 system prompt，避免历史 memory 或工具名污染当前意图判断。
 
 要做的事：
 
@@ -104,7 +107,7 @@
 当前状态：
 
 - chat 已经比以前轻
-- goals 仍然是固定重链路
+- `ConversationLoop` 已成为 chat / goal 的统一入口
 
 要做的事：
 
@@ -124,11 +127,10 @@
 
 当前状态：
 
-- goals 目前默认还是：
-  - analyze
-  - decompose
-  - delegate
-  - summarize
+- 2026-05-26 更新：goals 已支持 `direct` / `planned` / `delegated` 三档执行。
+- 简单 goal 可在 lightweight loop 内直接完成。
+- 中等 goal 会 analyze/decompose/summarize，但不默认调用 Aide/Forge。
+- 复杂或明确多代理任务才进入 delegation。
 
 要做的事：
 
@@ -144,16 +146,22 @@
 
 当前状态：
 
-- Aide 和 Forge 已经能工作
-- 但它们仍然更偏 graph delegation 阶段的资产
+- 已完成。
+- Aide 和 Forge 已经作为 planning loop 内的原生 delegation 动作使用。
+- 2026-05-26 更新：SeranaAgent 已改为由 `ConversationLoop` 升级到显式 planning flow，按执行模式决定是否调用 Aide/Forge；不再通过每次 `LangGraph.compile().ainvoke()` 运行主规划链。
+- 2026-05-26 更新：planning flow 已迁入 `loop.py`，由 loop runtime 自己执行 analyze/decompose/delegate/summarize；Aide/Forge 委派新增 `serana_loop_action` trace。
+- 2026-05-26 更新：旧 `GraphExecutor`、`serana_graph_stage`、`graph_stages` 兼容入口已移除；loop 现在使用 `PlanningExecutor`，阶段 trace 统一写入 `serana_planning_stage`，audit insights 只暴露 `planning_stages`。
+- 2026-05-26 更新：delegation 已补齐子任务级 agent assignment、生命周期 trace、统一 `tool_result` 回灌和失败降级摘要。
 
-要做的事：
+已完成：
 
 - 让 delegation 成为 loop 内的原生动作
 - 让 loop 自己决定：
   - 要不要委派
   - 委派给谁
   - 子代理结果如何回到当前会话
+- 子代理执行写入 `serana_agent_lifecycle` trace。
+- `serana_delegate` 输出统一 `tool_result`，并同步写入内部 `tool_results`。
 
 预期结果：
 
@@ -164,9 +172,12 @@
 当前状态：
 
 - 工具结果已经会影响用户回复
-- 但返回结构还没有完全统一
+- 返回结构已收敛到统一协议
+- 2026-05-26 更新：direct tool executor 已开始输出统一 `tool_result` 子结构，并同步写入内部 `tool_results`；旧的 tool output 字段保持兼容。
+- 2026-05-26 更新：`core/tool_results.py` 已抽出 `serana.tool_result.v1` 协议；direct tools、browser tools、Aide、Forge、Serana delegate 都通过同一套 helper 生成结果，聊天审计 payload 会额外提升 `tool_result` 字段。
+- 2026-05-27 更新：audit insights 已补齐 `tool_result_names`、`tool_result_statuses`、`tool_result_schema_versions`、`artifact_kinds`，前端和调试层可以不再手动遍历每条 trace。
 
-要做的事：
+已完成：
 
 - 为所有工具定义统一结果结构：
   - tool 名
@@ -174,6 +185,8 @@
   - 输出
   - 状态
   - 面向用户的摘要
+  - artifact
+  - schema_version / result_type / metadata
 
 预期结果：
 
@@ -189,14 +202,17 @@
 
 当前状态：
 
-- 本地工具已经有了
-- weather 已经能联网
-- browser tooling 还没进主执行链
+- 已完成主链路接入。
+- 本地工具已经有了。
+- weather 已经能联网。
+- browser tooling 已接入 skill/tool 层和聊天 direct tool 路由。
+- 2026-05-27 更新：browser 工具统一返回 `browser_state`，前端/调试层可以稳定判断页面是否打开、当前 URL/标题、下一步建议和失败是否可恢复。
 
-要做的事：
+已完成：
 
 - 把浏览器和网页工具接进 skill/tool 层
 - 再统一纳入主执行模型
+- 为 `open/search/observe/act/capture/look/download/preview/close` 补齐产品化状态返回。
 
 预期结果：
 
@@ -207,9 +223,10 @@
 当前状态：
 
 - audit / timeline / trace 已经很强
-- 但审批和执行控制还没产品化
+- 审批和执行控制已经进入产品化收口
+- 2026-05-27 更新：审批请求会明确返回 `reason` 和 `approval_options`；聊天前端支持“本次允许 / 持续允许 / 拒绝”；后端支持内存级持续允许授权，按 tool、operation、risk 和关键参数匹配。
 
-要做的事：
+已完成：
 
 - 对高风险动作加入审批
 - 支持：
@@ -227,8 +244,9 @@
 
 - 本地和远程 skill 安装已经有基础能力
 - instruction skill 已经能影响 chat 和 goals
+- 2026-05-31 更新：skill 生命周期已补齐产品化主链路，包含来源展示、信任状态、生效范围、ClawHub managed skill 更新、卸载审批和 Android 技能页入口。
 
-要做的事：
+已完成：
 
 - 完整支持：
   - 安装
@@ -287,4 +305,3 @@
 - 收益最大
 - 最直接贴近 Sebastian 风格
 - 能继续减少简单请求的不必要模型调用
-

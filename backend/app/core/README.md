@@ -1,88 +1,46 @@
-# Backend Core Module
+# core 目录说明
 
-This directory contains shared infrastructure used across the backend.
+这里放后端跨模块共享的基础设施。凡是 API、Agent、Memory、Skills、Approvals 都会复用的能力，优先放在这里。
 
-## Structure
+## 目录结构
 
 ```text
 core/
 +-- __init__.py
-+-- audit.py
-+-- config.py
-+-- database.py
-+-- deps.py
-+-- exceptions.py
-+-- init_db.py
-+-- llm_gateway.py
-+-- logger.py
-+-- models.py
-+-- schemas.py
-+-- security.py
++-- artifacts.py   前端可展示 artifact 的统一结构
++-- audit.py       审计记录写入、摘要和 timeline
++-- config.py      应用配置
++-- database.py    Async SQLAlchemy engine / session
++-- deps.py        FastAPI 依赖注入
++-- exceptions.py  自定义异常与全局异常处理
++-- init_db.py     初始化数据库与默认用户
++-- llm_gateway.py LLM provider 与实例创建
++-- logger.py      日志分层与 logger 工厂
++-- models.py      ORM 模型
++-- schemas.py     API 与前后端共享的 Pydantic schema
++-- security.py    敏感配置加解密
++-- tool_results.py 工具执行结果回灌协议
 ```
 
-## Module Responsibilities
+## 与本轮开发相关的文件
 
-### `config.py`
+- `config.py`
+  - 集中读取 `.env` 配置，包含应用版本、日志级别、CORS、数据库、默认 LLM、服务端口和 ClawHub 地址。
+- `schemas.py`
+  - 现在包含聊天审批使用的 `ApprovalRequest` 和 `ApprovalResponse`。
+- `artifacts.py`
+  - 负责截图、HTML 预览、下载文件等统一 artifact 结构。
+- `tool_results.py`
+  - 统一生成 `serana.tool_result.v1`，包含工具名、输入、输出、状态、用户摘要、artifact 和元数据。
+  - Agent、Skill、Browser 等链路需要向用户回复回灌工具结果时优先使用这里的 `build_tool_result()` / `attach_tool_result()` / `append_tool_result()`。
+- `audit.py`
+  - 审计工具调用、路由决策和后续调试查看。
+  - planning flow 的汇总字段是 `planning_stages`；旧 `graph_stages` 兼容字段已经移除。
+  - `tool_result` 会在 audit payload 中提升为顶层字段，并汇总到 `tool_result_names`、`tool_result_statuses`、`tool_result_schema_versions` 和 `artifact_kinds`。
 
-Application settings and environment-driven configuration.
+## 维护约定
 
-### `database.py`
-
-Async SQLAlchemy engine, session factory, and database helpers.
-
-### `models.py`
-
-ORM models for:
-
-- chat sessions and messages
-- goals, subtasks, and goal events
-- memory facts
-- agent sessions
-- skill packages
-- user LLM configuration
-- audit records
-
-### `schemas.py`
-
-Pydantic request and response models for the API surface, audit views, debug views, and internal transport structures.
-
-### `deps.py`
-
-FastAPI dependency helpers, including the default local user context and active LLM configuration lookup.
-
-### `init_db.py`
-
-Database initialization and lightweight startup migrations for local development.
-
-### `llm_gateway.py`
-
-Provider abstraction and configuration handling for LLM access.
-
-### `security.py`
-
-Encryption and decryption helpers for sensitive configuration data.
-
-### `logger.py`
-
-Central logging configuration for the application.
-
-### `audit.py`
-
-Helpers for writing, filtering, summarizing, and aggregating audit records.
-
-### `exceptions.py`
-
-Custom exception types and global exception handlers.
-
-## Design Notes
-
-- the backend is optimized for personal deployment
-- shared models and schemas should stay stable because they anchor both APIs and debug tooling
-- new cross-cutting behavior should usually land here before being reused elsewhere
-
-## Related Docs
-
-- [Backend Guide](../../README.md)
-- [Backend App Module](../README.md)
-- [Backend API Module](../api/README.md)
-- [Architecture](../../../docs/Architecture.md)
+- 只服务单一路由或单个 skill 的逻辑，不要提前塞进 `core/`。
+- 新增共享 schema、artifact 或 `tool_result` 字段时，要同步检查 Android DTO 是否需要更新。
+- 改动 `schemas.py` 后，优先回看 `api/README.md` 和相关客户端解析代码。
+- 新增环境变量时，同步更新 `backend/.env.example`、根目录 `README.md` 和 `docs/OPERATIONS.md`。

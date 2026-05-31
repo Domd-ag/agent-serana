@@ -8,9 +8,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.approvals.service import resolve_approval_decision
 from app.agents.serana.runtime import prepare_serana_runtime
 from app.core import (
     AgentSession,
+    ApprovalResponse,
     AuditRecord,
     AuditRecordResponse,
     AuditTimelineResponse,
@@ -341,6 +343,11 @@ async def _persist_assistant_result(
     db.add(assistant_message)
 
     for tool_call in tool_calls:
+        tool_result = None
+        if isinstance(tool_call.output, dict):
+            maybe_tool_result = tool_call.output.get("tool_result")
+            if isinstance(maybe_tool_result, dict):
+                tool_result = maybe_tool_result
         append_audit_record(
             db,
             entity_type="chat_session",
@@ -352,6 +359,7 @@ async def _persist_assistant_result(
                 "status": tool_call.status,
                 "input": tool_call.input,
                 "output": tool_call.output,
+                "tool_result": tool_result,
                 "timestamp": tool_call.timestamp,
             },
             message_id=assistant_message.id,
@@ -552,6 +560,19 @@ async def get_chat_debug(
     )
 
 
+@router.post("/approvals/{request_id}", response_model=ApprovalResponse)
+async def submit_chat_approval(
+    request_id: str,
+    approval_response: ApprovalResponse,
+    db: AsyncSession = Depends(get_db),
+):
+    return await resolve_approval_decision(
+        request_id=request_id,
+        approval_response=approval_response,
+        db=db,
+    )
+
+
 @router.post("/message")
 async def send_chat_message(
     message_request: ChatMessageRequest,
@@ -603,6 +624,7 @@ async def send_chat_message(
                 ):
                     event_type = event.get("type")
                     if event_type == "thinking":
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         continue
                     if event_type == "thinking_block":
                         block_payload = event.get("content")
@@ -612,6 +634,9 @@ async def send_chat_message(
                         continue
                     if event_type == "content":
                         accumulated_content += str(event.get("content") or "")
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        continue
+                    if event_type in {"approval_requested", "approval_resolved"}:
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         continue
                     if event_type == "done":

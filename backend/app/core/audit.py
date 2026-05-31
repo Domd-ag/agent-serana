@@ -95,10 +95,14 @@ def build_audit_insights(records: list[AuditRecord]) -> AuditInsightsResponse:
     task_types: set[str] = set()
     strategies: set[str] = set()
     tool_names: set[str] = set()
+    tool_result_names: set[str] = set()
+    tool_result_statuses: set[str] = set()
+    tool_result_schema_versions: set[str] = set()
+    artifact_kinds: set[str] = set()
     loop_stages: set[str] = set()
     lightweight_routes: set[str] = set()
     loop_transition_targets: set[str] = set()
-    graph_stages: set[str] = set()
+    planning_stages: set[str] = set()
     execution_modes: set[str] = set()
     retry_limits: set[int] = set()
     batch_sizes: set[int] = set()
@@ -130,6 +134,19 @@ def build_audit_insights(records: list[AuditRecord]) -> AuditInsightsResponse:
             nested_value = payload.get(nested_key)
             if isinstance(nested_value, dict):
                 payload_layers.append(nested_value)
+        tool_result = payload.get("tool_result")
+        if not isinstance(tool_result, dict):
+            output_payload = payload.get("output")
+            if isinstance(output_payload, dict) and isinstance(output_payload.get("tool_result"), dict):
+                tool_result = output_payload["tool_result"]
+        if isinstance(tool_result, dict):
+            payload_layers.append(tool_result)
+            artifact = tool_result.get("artifact")
+            if isinstance(artifact, dict):
+                _collect_string(artifact_kinds, artifact.get("kind"))
+            _collect_string(tool_result_names, tool_result.get("tool_name"))
+            _collect_string(tool_result_statuses, tool_result.get("status"))
+            _collect_string(tool_result_schema_versions, tool_result.get("schema_version"))
 
         for layer in payload_layers:
             _collect_string(task_types, layer.get("task_type"))
@@ -159,9 +176,9 @@ def build_audit_insights(records: list[AuditRecord]) -> AuditInsightsResponse:
         elif event_type == "serana_loop_transition":
             for layer in payload_layers:
                 _collect_string(loop_transition_targets, layer.get("next_stage"))
-        elif event_type == "serana_graph_stage":
+        elif event_type == "serana_planning_stage":
             for layer in payload_layers:
-                _collect_string(graph_stages, layer.get("stage"))
+                _collect_string(planning_stages, layer.get("stage"))
 
         if _is_failed_payload(payload_layers):
             failed_event_types.add(record.event_type)
@@ -171,10 +188,14 @@ def build_audit_insights(records: list[AuditRecord]) -> AuditInsightsResponse:
         task_types=sorted(task_types),
         strategies=sorted(strategies),
         tool_names=sorted(tool_names),
+        tool_result_names=sorted(tool_result_names),
+        tool_result_statuses=sorted(tool_result_statuses),
+        tool_result_schema_versions=sorted(tool_result_schema_versions),
+        artifact_kinds=sorted(artifact_kinds),
         loop_stages=sorted(loop_stages),
         lightweight_routes=sorted(lightweight_routes),
         loop_transition_targets=sorted(loop_transition_targets),
-        graph_stages=sorted(graph_stages),
+        planning_stages=sorted(planning_stages),
         execution_modes=sorted(execution_modes),
         retry_limits=sorted(retry_limits),
         batch_sizes=sorted(batch_sizes),

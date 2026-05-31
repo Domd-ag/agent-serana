@@ -1,5 +1,10 @@
 package com.serana.app.ui.screens
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,34 +34,76 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.serana.app.data.models.ApprovalRequest
 import com.serana.app.data.models.MarketplaceSkill
+import com.serana.app.data.models.SkillLifecycleStatus
 import com.serana.app.data.models.SkillPackage
 import com.serana.app.data.models.SkillTool
 import com.serana.app.viewmodel.SkillsViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SkillsScreen(
     viewModel: SkillsViewModel = viewModel(),
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsState()
     val selectedSkill by viewModel.selectedSkill.collectAsState()
     val selectedSkillTools by viewModel.selectedSkillTools.collectAsState()
+    val selectedSkillLifecycle by viewModel.selectedSkillLifecycle.collectAsState()
     val isDetailLoading by viewModel.isDetailLoading.collectAsState()
     val detailError by viewModel.detailError.collectAsState()
     val updatingSkillNames by viewModel.updatingSkillNames.collectAsState()
+    val removingSkillNames by viewModel.removingSkillNames.collectAsState()
+    val updatingRemoteSkillNames by viewModel.updatingRemoteSkillNames.collectAsState()
     val marketplaceSkills by viewModel.marketplaceSkills.collectAsState()
     val marketplaceLoading by viewModel.marketplaceLoading.collectAsState()
     val marketplaceError by viewModel.marketplaceError.collectAsState()
     val installingMarketplaceSlugs by viewModel.installingMarketplaceSlugs.collectAsState()
+    val pendingMarketplaceApproval by viewModel.pendingMarketplaceApproval.collectAsState()
+    val submittingMarketplaceApproval by viewModel.submittingMarketplaceApproval.collectAsState()
+    val pendingLocalApproval by viewModel.pendingLocalApproval.collectAsState()
+    val submittingLocalApproval by viewModel.submittingLocalApproval.collectAsState()
+    val uploadingLocalSkill by viewModel.uploadingLocalSkill.collectAsState()
+    val pendingUploadApproval by viewModel.pendingUploadApproval.collectAsState()
+    val submittingUploadApproval by viewModel.submittingUploadApproval.collectAsState()
+    val pendingUpdateApproval by viewModel.pendingUpdateApproval.collectAsState()
+    val submittingUpdateApproval by viewModel.submittingUpdateApproval.collectAsState()
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("全部") }
     var marketplaceQuery by remember { mutableStateOf("") }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val archive = withContext(Dispatchers.IO) {
+                readSkillArchiveFromUri(context, uri)
+            }
+            if (archive == null) {
+                viewModel.showSkillError("无法读取所选技能压缩包")
+                return@launch
+            }
+            viewModel.uploadSkillArchive(
+                fileName = archive.first,
+                fileBytes = archive.second,
+            )
+        }
+    }
 
     val filteredSkills = uiState.data.filter { skill ->
         val matchesQuery = query.isBlank() ||
@@ -75,10 +122,61 @@ fun SkillsScreen(
     selectedSkill?.let { skill ->
         SkillDetailDialog(
             skill = skill,
+            lifecycle = selectedSkillLifecycle,
             tools = selectedSkillTools,
             isLoading = isDetailLoading,
             error = detailError,
+            isRemoving = removingSkillNames.contains(skill.name),
+            isUpdating = updatingRemoteSkillNames.contains(skill.name) ||
+                updatingSkillNames.contains(skill.name),
+            onRemove = { viewModel.removeSkill(skill) },
+            onUpdate = { viewModel.updateRemoteSkill(skill) },
+            onScopeChange = { viewModel.updateSkillScope(skill, it) },
             onDismiss = viewModel::dismissSkillDetail,
+        )
+    }
+
+    pendingMarketplaceApproval?.let { approval ->
+        SkillApprovalDialog(
+            request = approval,
+            isSubmitting = submittingMarketplaceApproval,
+            onApprove = viewModel::approveMarketplaceInstall,
+            onDeny = viewModel::denyMarketplaceInstall,
+            confirmLabel = "允许安装",
+            dismissLabel = "取消",
+        )
+    }
+
+    pendingLocalApproval?.let { approval ->
+        SkillApprovalDialog(
+            request = approval,
+            isSubmitting = submittingLocalApproval,
+            onApprove = viewModel::approveSkillRemoval,
+            onDeny = viewModel::denySkillRemoval,
+            confirmLabel = "确认卸载",
+            dismissLabel = "保留技能",
+        )
+    }
+
+    pendingUploadApproval?.let { approval ->
+        SkillApprovalDialog(
+            request = approval,
+            isSubmitting = submittingUploadApproval,
+            onApprove = viewModel::approveSkillUpload,
+            onDeny = viewModel::denySkillUpload,
+            confirmLabel = "确认导入",
+            dismissLabel = "取消导入",
+        )
+    }
+
+    pendingUpdateApproval?.let { approval ->
+        SkillApprovalDialog(
+            request = approval,
+            isSubmitting = submittingUpdateApproval,
+            onApprove = viewModel::approveSkillUpdate,
+            onDeny = viewModel::denySkillUpdate,
+            confirmLabel = "确认更新",
+            dismissLabel = "取消",
         )
     }
 
@@ -126,6 +224,17 @@ fun SkillsScreen(
                 filter = filter,
                 onFilterChange = { filter = it },
                 shownCount = filteredSkills.size,
+                isUploading = uploadingLocalSkill,
+                onImportZip = {
+                    importLauncher.launch(
+                        arrayOf(
+                            "application/zip",
+                            "application/x-zip-compressed",
+                            "application/octet-stream",
+                            "*/*",
+                        ),
+                    )
+                },
             )
 
             MarketplacePanel(
@@ -148,11 +257,11 @@ fun SkillsScreen(
             } else if (uiState.data.isEmpty()) {
                 EmptySkillsCard(
                     title = "还没有安装任何技能",
-                    body = "把技能包放进后端 store 后刷新，这里就会出现它们。",
+                    body = "可以从 ClawHub 市场安装，也可以导入本地 ZIP 技能包。",
                 )
             } else if (filteredSkills.isEmpty()) {
                 EmptySkillsCard(
-                    title = "没有匹配项",
+                    title = "没有匹配结果",
                     body = "试试更宽松的关键词，或者切回全部筛选。",
                 )
             } else {
@@ -163,7 +272,8 @@ fun SkillsScreen(
                     items(filteredSkills, key = { it.id }) { skill ->
                         SkillCard(
                             skill = skill,
-                            isUpdating = updatingSkillNames.contains(skill.name),
+                            isUpdating = updatingSkillNames.contains(skill.name) ||
+                                removingSkillNames.contains(skill.name),
                             onDetails = { viewModel.loadSkillDetail(skill) },
                             onToggle = { viewModel.toggleSkill(skill) },
                         )
@@ -180,12 +290,106 @@ fun SkillsScreen(
 }
 
 @Composable
+private fun SkillApprovalDialog(
+    request: ApprovalRequest,
+    isSubmitting: Boolean,
+    onApprove: () -> Unit,
+    onDeny: () -> Unit,
+    confirmLabel: String,
+    dismissLabel: String,
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        confirmButton = {
+            Button(
+                onClick = onApprove,
+                enabled = !isSubmitting,
+            ) {
+                Text(if (isSubmitting) "提交中…" else confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDeny,
+                enabled = !isSubmitting,
+            ) {
+                Text(dismissLabel)
+            }
+        },
+        title = {
+            Text(request.title)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = request.summary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = when (request.riskLevel.lowercase()) {
+                        "high" -> "高风险"
+                        "medium" -> "中风险"
+                        else -> "低风险"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when (request.riskLevel.lowercase()) {
+                        "high" -> MaterialTheme.colorScheme.error
+                        "medium" -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.secondary
+                    },
+                )
+                skillApprovalRows(request).forEach { (label, value) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = value,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
+private fun skillApprovalRows(request: ApprovalRequest): List<Pair<String, String>> {
+    val rows = mutableListOf<Pair<String, String>>()
+    request.details["slug"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "技能" to it
+    }
+    request.details["skill_name"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "技能" to it
+    }
+    request.details["version"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "版本" to it
+    }
+    request.details["filename"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "文件" to it
+    }
+    request.details["origin"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "来源" to if (it.equals("managed", ignoreCase = true)) "已安装技能" else it
+    }
+    request.details["reason"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+        rows += "原因" to it
+    }
+    return rows
+}
+
+@Composable
 private fun SkillsOverviewPanel(
     query: String,
     onQueryChange: (String) -> Unit,
     filter: String,
     onFilterChange: (String) -> Unit,
     shownCount: Int,
+    isUploading: Boolean,
+    onImportZip: () -> Unit,
 ) {
     PanelSurface {
         Text("已安装技能", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -194,6 +398,22 @@ private fun SkillsOverviewPanel(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "支持导入本地 ZIP 技能包",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onImportZip,
+                enabled = !isUploading,
+            ) {
+                Text(if (isUploading) "导入中…" else "导入 ZIP")
+            }
+        }
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
@@ -344,7 +564,7 @@ private fun SkillCard(
             Column(modifier = Modifier.fillMaxWidth(0.72f)) {
                 Text(skill.name, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "v${skill.version} · ${skill.agentType}",
+                    text = "v${skill.version} · ${skill.sourceLabel}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -370,7 +590,7 @@ private fun SkillCard(
             Text(it, style = MaterialTheme.typography.bodyMedium)
         }
         Text(
-            text = "最大实例数：${skill.maxInstances}",
+            text = "范围：${scopeLabel(skill.effectiveScope)} · 信任：${trustLabel(skill.trustState)}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -380,9 +600,15 @@ private fun SkillCard(
 @Composable
 private fun SkillDetailDialog(
     skill: SkillPackage,
+    lifecycle: SkillLifecycleStatus?,
     tools: List<SkillTool>,
     isLoading: Boolean,
     error: String?,
+    isRemoving: Boolean,
+    isUpdating: Boolean,
+    onRemove: () -> Unit,
+    onUpdate: () -> Unit,
+    onScopeChange: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -392,6 +618,18 @@ private fun SkillDetailDialog(
                 Text("关闭")
             }
         },
+        dismissButton = if (skill.canUninstall) {
+            {
+                TextButton(
+                    onClick = onRemove,
+                    enabled = !isRemoving,
+                ) {
+                    Text(if (isRemoving) "卸载中…" else "卸载技能")
+                }
+            }
+        } else {
+            null
+        },
         title = { Text(skill.name) },
         text = {
             Column(
@@ -399,18 +637,54 @@ private fun SkillDetailDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "v${skill.version} · ${skill.agentType}",
+                    text = "v${skill.version} · ${skill.sourceLabel}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 skill.author?.takeIf { it.isNotBlank() }?.let {
                     Text("作者：$it", style = MaterialTheme.typography.bodySmall)
                 }
-                Text("最大实例数：${skill.maxInstances}", style = MaterialTheme.typography.bodySmall)
                 Text(
                     text = if (skill.isEnabled) "状态：已启用" else "状态：已停用",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    text = "信任状态：${trustLabel(lifecycle?.trustState ?: skill.trustState)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                lifecycle?.sourceUrl?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = "来源：$it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SkillScopeSelector(
+                    selected = lifecycle?.effectiveScope ?: skill.effectiveScope,
+                    enabled = !isUpdating,
+                    onScopeChange = onScopeChange,
+                )
+                if ((lifecycle?.canUpdate == true || skill.canUpdate) && lifecycle?.updateAvailable == true) {
+                    Button(
+                        onClick = onUpdate,
+                        enabled = !isUpdating,
+                    ) {
+                        Text(
+                            if (isUpdating) {
+                                "更新中…"
+                            } else {
+                                "更新到 v${lifecycle.latestVersion ?: "latest"}"
+                            },
+                        )
+                    }
+                } else if (lifecycle?.canUpdate == true || skill.canUpdate) {
+                    Text(
+                        text = "当前已经是最新版本",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 skill.description?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
@@ -466,6 +740,52 @@ private fun SkillDetailDialog(
 }
 
 @Composable
+private fun SkillScopeSelector(
+    selected: String,
+    enabled: Boolean,
+    onScopeChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "生效范围",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf("all", "serana", "aide", "forge").forEach { scope ->
+                AssistChip(
+                    onClick = { onScopeChange(scope) },
+                    label = { Text(scopeLabel(scope)) },
+                    enabled = enabled && selected != scope,
+                )
+            }
+        }
+    }
+}
+
+private fun scopeLabel(scope: String): String {
+    return when (scope.lowercase()) {
+        "all" -> "全部"
+        "serana" -> "Serana"
+        "aide" -> "Aide"
+        "forge" -> "Forge"
+        else -> scope
+    }
+}
+
+private fun trustLabel(trustState: String): String {
+    return when (trustState.lowercase()) {
+        "trusted" -> "项目可信"
+        "marketplace" -> "市场来源"
+        "local" -> "本地导入"
+        else -> trustState
+    }
+}
+
+@Composable
 private fun EmptySkillsCard(
     title: String,
     body: String,
@@ -512,4 +832,28 @@ private fun SkillSurface(content: @Composable () -> Unit) {
             content()
         }
     }
+}
+
+private fun readSkillArchiveFromUri(context: Context, uri: Uri): Pair<String, ByteArray>? {
+    val fileName = resolveDisplayName(context, uri) ?: "skill.zip"
+    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+        input.readBytes()
+    } ?: return null
+    return fileName to bytes
+}
+
+private fun resolveDisplayName(context: Context, uri: Uri): String? {
+    context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (nameIndex >= 0 && cursor.moveToFirst()) {
+            return cursor.getString(nameIndex)
+        }
+    }
+    return null
 }

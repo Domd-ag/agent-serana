@@ -62,3 +62,9 @@ frontend-android/local.properties
 # Local reference repos and generated stores
 _external/
 /skills_store/
+backend/skills_store/browser/screenshots/
+backend/skills_store/browser/previews/
+backend/skills_store/browser/profile/
+backend/skills_store/browser/downloads/
+backend/skills_store/installed/
+backend/skills_store/.staging/

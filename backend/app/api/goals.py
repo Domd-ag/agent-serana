@@ -215,7 +215,7 @@ def _normalize_subtasks(
         return [
             {
                 "description": f"Handle directly with Serana: {direct_description}",
-                "status": "pending",
+                "status": "completed",
             }
         ]
 
@@ -387,6 +387,11 @@ async def create_goal(
             )
         )
 
+    if execution_mode == "direct":
+        goal.status = "completed"
+        goal.progress = 1.0
+        goal.completed_at = datetime.now(timezone.utc)
+
     _append_serana_audit_records(
         db=db,
         goal_id=goal.id,
@@ -398,9 +403,14 @@ async def create_goal(
         db,
         goal.id,
         "planned",
-        f"Planned goal with {len(subtasks_data)} subtasks.",
+        (
+            "Completed goal directly with Serana."
+            if execution_mode == "direct"
+            else f"Planned goal with {len(subtasks_data)} subtasks."
+        ),
         {
             "goal_status": goal.status,
+            "execution_mode": execution_mode,
             "subtask_count": len(subtasks_data),
             "planning_summary": goal.planning_summary,
         },

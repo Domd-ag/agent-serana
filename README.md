@@ -1,102 +1,75 @@
 # Serana
 
-Serana is a personal AI assistant system built for self-hosted use. It combines a FastAPI backend, a three-layer agent runtime, persistent memory, audit trails, and an Android client prototype.
+Serana 是一个面向个人自托管的 AI Butler 项目，由 FastAPI 后端和 Android 客户端组成。当前目标是逐步对齐 Sebastian 风格：轻量对话优先、复杂任务按需升级、浏览器和 skill 能力可控接入。
 
-## Project Status
+## 当前状态
 
-The backend is in a usable prototype-to-product transition state:
+- 后端已切到统一 `ConversationLoop`，简单聊天优先走轻链路，复杂任务再升级到规划和 Aide/Forge 委派。
+- 已接入 persona、working memory、instruction skills、工具结果回灌、浏览器 HTML preview、审批流。
+- Android 端已具备聊天、设置、技能市场、审批弹窗和 App 内 WebView 演示预览。
+- Skill 生命周期正在产品化：支持安装、启停、卸载、来源/信任/范围展示、远程更新入口。
 
-- core chat and goal flows are implemented
-- `Serana -> Aide -> Forge` orchestration is active
-- complexity routing, delegation, batching, retries, and audit tracing are implemented
-- debug and audit APIs are available
-- the Android client is partially integrated and still evolving
-
-This repository is optimized for personal deployment rather than multi-user or commercial use.
-
-## Repository Layout
+## 目录结构
 
 ```text
 .
-+-- backend/
-|   +-- app/
-|   |   +-- api/
-|   |   +-- agents/
-|   |   +-- core/
-|   |   +-- memory/
-|   |   +-- skills/
-|   |   +-- main.py
-|   +-- skills_store/
-|   +-- test_api_flows.py
-|   +-- requirements.txt
-|   +-- README.md
-+-- docs/
-|   +-- PRD.md
-|   +-- Architecture.md
-|   +-- DEVELOPMENT_PLAN.md
-|   +-- PHASE1_AGENT_SYSTEM.md
-|   +-- PHASE2_SKILL_SYSTEM.md
-|   +-- PHASE3_BROWSER_TOOLS.md
-|   +-- PHASE4_MEMORY_SYSTEM.md
-|   +-- PROJECT_SUMMARY.md
-+-- frontend-android/
-|   +-- app/
-|   +-- README.md
-+-- PROJECT_SUMMARY.md
++-- backend/            FastAPI 后端、agent 运行时、memory、skills、测试
++-- frontend-android/   Android / Jetpack Compose 客户端
++-- docs/               路线图、阶段文档和项目说明
++-- start-backend.bat   Windows 一键启动后端脚本
++-- PROJECT_SUMMARY.md  项目阶段总结
 ```
 
-## Core Capabilities
+## 快速启动
 
-- Goal-oriented agent orchestration
-- Three-layer agent model with pooled workers
-- Chat sessions, stored messages, and debug views
-- Goal planning, subtasks, progress tracking, and audit history
-- Persistent memory injection for chat and planning
-- Skill package loading from the local skill store
-- Unified audit records, timelines, and debug summaries
+### 后端
 
-## Quick Start
+Windows 下可以直接运行根目录脚本：
 
-### Backend
-
-See [backend/README.md](backend/README.md) for the detailed backend guide.
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+```bat
+start-backend.bat
 ```
 
-Open:
+脚本会：
 
-- Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
-- ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- 如果缺少 `backend/.env`，从 `backend/.env.example` 生成一份
+- 如果缺少 `backend/venv`，自动创建虚拟环境
+- 安装 `backend/requirements.txt`
+- 启动 `http://127.0.0.1:8000`
+
+常用地址：
+
+- 健康检查：[http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+- API 文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
 ### Android
 
-See [frontend-android/README.md](frontend-android/README.md). The Android client is currently managed through Android Studio rather than a checked-in Gradle wrapper.
+用 Android Studio 打开 `frontend-android/`。真机 USB 调试时，后端 Base URL 推荐配置为局域网地址，例如：
 
-## Documentation Map
+```text
+http://192.168.31.30:8000/api/v1/
+```
 
-- [Product Requirements](docs/PRD.md)
-- [Architecture](docs/Architecture.md)
-- [Development Plan](docs/DEVELOPMENT_PLAN.md)
-- [Project Summary](docs/PROJECT_SUMMARY.md)
-- [Backend Guide](backend/README.md)
-- [Backend App Module](backend/app/README.md)
-- [Backend API Module](backend/app/api/README.md)
-- [Backend Core Module](backend/app/core/README.md)
-- [Agent System](backend/app/agents/README.md)
-- [Android Client](frontend-android/README.md)
+## 配置
 
-## Current Priorities
+后端集中配置在 `backend/.env`，示例见 [backend/.env.example](backend/.env.example)。常用项：
 
-- continue polishing failure-path behavior and tests
-- improve Android integration and streaming UI
-- keep documentation aligned with the implemented backend behavior
+- `LOG_LEVEL`：日志级别，默认 `INFO`
+- `DATABASE_URL`：数据库地址，默认本地 SQLite
+- `DEFAULT_LLM_*`：默认 LLM 配置
+- `HOST` / `PORT`：服务监听地址
+- `CLAWHUB_BASE_URL`：ClawHub 市场地址
 
-## License
+## 文档入口
 
-MIT
+- [后端说明](backend/README.md)
+- [Android 说明](frontend-android/README.md)
+- [Sebastian 风格后端路线图](docs/SEBASTIAN_BACKEND_ROADMAP.md)
+- [后端 API 目录说明](backend/app/api/README.md)
+- [后端 Skill 目录说明](backend/app/skills/README.md)
+
+## 维护约定
+
+- 以后新增、删除、重命名文件时，同步更新对应目录下的 `README.md`。
+- 后端文档统一使用中文。
+- GitHub 提交前先做一次后端测试、Android 编译和文档状态检查。
