@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import logger
 from app.core.models import ProfileFact, Message
+from app.memory.artifacts import MemoryArtifactManager
 from app.memory.facts import ProfileFactsManager
 from app.memory.history import HistoryManager
 
@@ -34,6 +35,7 @@ class MemoryRetriever:
         self.user_id = user_id
         self.facts_manager = ProfileFactsManager(db, user_id)
         self.history_manager = HistoryManager(db, user_id)
+        self.artifact_manager = MemoryArtifactManager(db, user_id)
     
     async def retrieve(
         self,
@@ -52,7 +54,7 @@ class MemoryRetriever:
             time_range: 时间范围限制
         """
         if memory_types is None:
-            memory_types = ["facts", "history"]
+            memory_types = ["facts", "preferences", "summaries", "episodes"]
         
         items: List[MemoryItem] = []
         
@@ -60,16 +62,68 @@ class MemoryRetriever:
         if "facts" in memory_types:
             fact_items = await self._retrieve_facts(query, time_range)
             items.extend(fact_items)
+
+        if "preferences" in memory_types or "preference" in memory_types:
+            preference_items = await self._retrieve_artifacts(query, ["preference"], limit)
+            items.extend(preference_items)
+
+        if "summaries" in memory_types or "summary" in memory_types:
+            summary_items = await self._retrieve_artifacts(query, ["summary"], limit)
+            items.extend(summary_items)
+
+        summary_count = sum(1 for item in items if item.memory_type == "summary")
+        should_fetch_episodes = (
+            "episodes" in memory_types or "episode" in memory_types
+        ) and summary_count < limit
+
+        if should_fetch_episodes:
+            remaining = max(1, limit - summary_count)
+            episode_items = await self._retrieve_artifacts(query, ["episode"], remaining)
+            items.extend(episode_items)
         
         # 检索历史记录
         if "history" in memory_types:
             history_items = await self._retrieve_history(query, time_range, limit // 2)
             items.extend(history_items)
         
-        # 按相关性排序
-        items.sort(key=lambda x: x.relevance_score, reverse=True)
+        # Summary-first: dense summaries outrank detailed episodes and raw history.
+        priority = {"fact": 3, "preference": 3, "summary": 2, "episode": 1, "history": 0}
+        items.sort(key=lambda x: (priority.get(x.memory_type, 0), x.relevance_score), reverse=True)
         
         return items[:limit]
+
+    async def _retrieve_artifacts(
+        self,
+        query: str,
+        kinds: list[str],
+        limit: int,
+    ) -> List[MemoryItem]:
+        artifacts = await self.artifact_manager.search(
+            query=query,
+            kinds=kinds,
+            limit=limit,
+        )
+        items: List[MemoryItem] = []
+        for artifact in artifacts:
+            content = self.artifact_manager._sanitize_content(str(artifact.content or ""))
+            if not content:
+                continue
+            score = self.artifact_manager.score_text(query, f"{artifact.title or ''} {content}")
+            items.append(
+                MemoryItem(
+                    content=content,
+                    memory_type=str(artifact.kind),
+                    relevance_score=score * float(artifact.confidence or 0.8),
+                    timestamp=artifact.updated_at or artifact.created_at,
+                    metadata={
+                        "artifact_id": artifact.id,
+                        "title": artifact.title,
+                        "session_id": artifact.session_id,
+                        "source": artifact.source,
+                    },
+                )
+            )
+        return items
     
     async def _retrieve_facts(
         self,

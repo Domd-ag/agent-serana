@@ -13,9 +13,9 @@ PERSONA_PATH = Path(__file__).with_name("persona.md")
 def load_serana_persona() -> str:
     if not PERSONA_PATH.exists():
         logger.warning("Serana persona file not found: %s", PERSONA_PATH)
-        return "You are Serana, a calm and reliable personal butler."
+        return "You are Serana, a calm and reliable private housekeeper."
     content = PERSONA_PATH.read_text(encoding="utf-8").strip()
-    return content or "You are Serana, a calm and reliable personal butler."
+    return content or "You are Serana, a calm and reliable private housekeeper."
 
 
 def initialize_serana_persona() -> str:

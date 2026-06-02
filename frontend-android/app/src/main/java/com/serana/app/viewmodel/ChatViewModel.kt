@@ -58,7 +58,7 @@ class ChatViewModel : ViewModel() {
         listOf(
             Message(
                 id = "welcome",
-                content = "Hello, I am Serana. The Android client is now connected to the backend.",
+                content = "新的对话已准备好，随时告诉 Serana 你想做什么。",
                 role = Role.ASSISTANT,
             ),
         ),
@@ -134,7 +134,7 @@ class ChatViewModel : ViewModel() {
                     RetrofitClient.apiService.getChatDebug(sessionId)
                 }
                 if (!messagesResponse.isSuccessful || messagesResponse.body() == null) {
-                    throw IllegalStateException("Failed to load chat history")
+                    throw IllegalStateException("加载聊天记录失败")
                 }
                 currentSessionId = sessionId
                 _currentSessionId.value = sessionId
@@ -143,7 +143,7 @@ class ChatViewModel : ViewModel() {
                     applyDebugResponse(debugResponse.body()!!, keepMessages = true)
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load chat session"
+                _error.value = e.message ?: "加载会话失败"
             } finally {
                 _isLoading.value = false
             }
@@ -223,12 +223,16 @@ class ChatViewModel : ViewModel() {
                     ) { event ->
                         when (event) {
                             is ChatStreamEvent.ThinkingBlock -> appendThinkingBlock(assistantMessageId, event.block)
+                            is ChatStreamEvent.Thinking -> handleThinkingHeartbeat(assistantMessageId)
                             is ChatStreamEvent.Content -> appendAssistantContent(assistantMessageId, event.chunk)
                             is ChatStreamEvent.ApprovalRequested -> showApprovalRequest(assistantMessageId, event.request)
                             is ChatStreamEvent.ApprovalResolved -> handleApprovalResolved(assistantMessageId, event.response)
+                            is ChatStreamEvent.ToolCall -> appendToolCall(assistantMessageId, event.toolCall)
+                            is ChatStreamEvent.Error -> handleStreamError(assistantMessageId, event.message)
                             is ChatStreamEvent.Done -> {
                                 currentSessionId = event.sessionId.ifBlank { currentSessionId }
                                 _currentSessionId.value = currentSessionId
+                                _isLoading.value = false
                                 _pendingApproval.value = null
                                 applyStreamDone(assistantMessageId, event)
                             }
@@ -365,7 +369,7 @@ class ChatViewModel : ViewModel() {
             }
             val payload = response.body()
             if (!response.isSuccessful || payload == null) {
-                throw IllegalStateException("Chat request failed: ${response.code()}")
+                throw IllegalStateException("聊天请求失败：${response.code()}")
             }
             currentSessionId = payload.sessionId
             _currentSessionId.value = payload.sessionId
@@ -378,12 +382,12 @@ class ChatViewModel : ViewModel() {
             )
             refreshSessions()
         } catch (fallbackError: Exception) {
-            _error.value = fallbackError.message ?: error.message ?: "Unknown error"
+            _error.value = fallbackError.message ?: error.message ?: "未知错误"
             replaceAssistantMessage(
                 assistantMessageId,
                 Message(
                     id = assistantMessageId,
-                    content = "Streaming failed and the fallback request also failed.",
+                    content = "流式响应中断，备用请求也失败了。请稍后再试。",
                     role = Role.ASSISTANT,
                     streamStatus = StreamStatus.FAILED,
                 ),
@@ -453,6 +457,10 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    private fun handleThinkingHeartbeat(messageId: String) {
+        updateStreamStatus(messageId, StreamStatus.THINKING)
+    }
+
     private fun appendThinkingBlock(messageId: String, block: ThinkingBlockDto) {
         viewModelScope.launch {
             messageUpdateMutex.withLock {
@@ -460,6 +468,23 @@ class ChatViewModel : ViewModel() {
                     if (message.id == messageId) {
                         message.copy(
                             thinkingBlocks = message.thinkingBlocks + mapThinkingBlock(block),
+                        ).withStreamStatus(StreamStatus.THINKING)
+                    } else {
+                        message
+                    }
+                }
+            }
+        }
+    }
+
+    private fun appendToolCall(messageId: String, toolCall: ToolCallDto) {
+        viewModelScope.launch {
+            messageUpdateMutex.withLock {
+                val trace = mapToolCall(toolCall)
+                _messages.value = _messages.value.map { message ->
+                    if (message.id == messageId && message.toolCalls.none { it.id == trace.id }) {
+                        message.copy(
+                            toolCalls = message.toolCalls + trace,
                         ).withStreamStatus(StreamStatus.THINKING)
                     } else {
                         message
@@ -480,6 +505,21 @@ class ChatViewModel : ViewModel() {
             _pendingApproval.value = null
         }
         updateStreamStatus(messageId, StreamStatus.THINKING)
+    }
+
+    private fun handleStreamError(messageId: String, message: String) {
+        val displayMessage = message.ifBlank { "后端流式响应中断，请稍后重试。" }
+        _error.value = displayMessage
+        _isLoading.value = false
+        replaceAssistantMessage(
+            messageId,
+            Message(
+                id = messageId,
+                content = displayMessage,
+                role = Role.ASSISTANT,
+                streamStatus = StreamStatus.FAILED,
+            ),
+        )
     }
 
     private fun applyStreamDone(messageId: String, event: ChatStreamEvent.Done) {

@@ -7,15 +7,10 @@
 ```text
 backend/
 +-- app/                 后端应用源码
-+-- skills_store/        本地 Sebastian 风格 skill 包
++-- skills_store/        本地 Sebastian 风格 skill 仓库
 +-- requirements.txt     Python 依赖
 +-- test_api_flows.py    主要 API/agent 回归测试
 +-- test_full_system.py  全链路手动/集成验证
-+-- test_init_db.py      数据库初始化验证
-+-- test_memory_system.py
-+-- test_new_agent.py
-+-- test_new_skills.py
-+-- test_skill_system.py
 ```
 
 `venv/`、`__pycache__/`、浏览器截图和 HTML 预览属于本地运行产物，不属于源码结构。
@@ -27,7 +22,7 @@ backend/
 - `app/agents/` 实现 Serana、Aide、Forge 的 agent 运行时。
 - `app/core/` 放置数据库、模型、schema、LLM 网关、审计、日志等共享基础设施。
 - `app/memory/` 管理长期事实记忆、resident snapshot、working memory、历史检索和 prompt 注入。
-- `app/skills/` 负责 Sebastian 风格 skill 的加载、校验、启停、ClawHub 搜索/安装、更新、卸载和生命周期状态。
+- `app/skills/` 负责 Sebastian 风格 skill 的加载、校验、启停、SkillHub 搜索/安装、更新、卸载和生命周期状态。
 - `skills_store/` 存放可被 `SkillManager` 扫描加载的本地 skill 包。
 
 ## 常用入口
@@ -41,20 +36,14 @@ backend/
 - 技能管理：`/api/v1/skills/*`
 - 浏览器 artifact：`/api/v1/browser/*`
 
-## 配置与运行维护
+## 配置
 
 - 配置集中在 `backend/.env`，缺失时可从 `.env.example` 复制。
 - `LOG_LEVEL` 控制后端日志级别，常用值为 `DEBUG`、`INFO`、`WARNING`。
-- `CORS_ALLOW_ORIGINS` 默认允许所有来源；正式部署时可以改成逗号分隔的可信前端地址。
-- `CLAWHUB_BASE_URL` 控制 ClawHub 市场来源，默认 `https://clawhub.ai`。
+- `CORS_ALLOW_ORIGINS` 默认允许所有来源，正式部署时可改成逗号分隔的可信前端地址。
+- `SKILLHUB_BASE_URL` 控制 SkillHub API 来源，默认 `https://api.skillhub.cn`。
+- `SKILLHUB_PUBLIC_BASE_URL` 控制 SkillHub 前端展示链接，默认 `https://skillhub.cn`。
 - SQLite 默认文件是后端工作目录下的 `serana.db`；需要换库时修改 `DATABASE_URL`。
-- 运行维护说明见 `../docs/OPERATIONS.md`。
-
-## 清理记录
-
-- 已删除历史一次性编码修复脚本：`fix_all.py`、`fix_files.py`、`fix_html_encoding.py`。
-- 已删除旧导入诊断脚本：`test_import.py`、`test_import_full.py`、`test_step_by_step.py`。
-- 已移除空遗留目录：`app/browser`、`app/tools`、`skills`、`tests`。
 
 ## 维护约定
 

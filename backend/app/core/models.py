@@ -18,6 +18,7 @@ class User(Base):
 
     profile_facts = relationship("ProfileFact", back_populates="user", cascade="all, delete-orphan")
     resident_memories = relationship("ResidentMemory", back_populates="user", cascade="all, delete-orphan")
+    memory_artifacts = relationship("MemoryArtifact", back_populates="user", cascade="all, delete-orphan")
     working_memories = relationship("WorkingMemory", back_populates="user", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     goals = relationship("Goal", back_populates="user", cascade="all, delete-orphan")
@@ -56,6 +57,25 @@ class ResidentMemory(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="resident_memories")
+
+
+class MemoryArtifact(Base):
+    __tablename__ = "memory_artifacts"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String, nullable=True)
+    kind = Column(String, nullable=False)
+    title = Column(String, nullable=True)
+    content = Column(Text, nullable=False)
+    artifact_metadata = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.8)
+    source = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="memory_artifacts")
 
 
 class WorkingMemory(Base):

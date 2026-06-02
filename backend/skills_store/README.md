@@ -1,24 +1,22 @@
 # skills_store 目录说明
 
-这里是后端技能文件仓库，按来源分成三层：
+这里是 Serana 后端的本地 skill 文件仓库。
+
+当前旧的内置 skill 已经全部清理，仓库默认不再携带 `weather`、`calculator`、`browser`、`time_manager` 等历史技能包。后续 skill 应通过 SkillHub 下载、远程安装或本地 ZIP 导入重新进入这里。
+
+## 目录结构
 
 ```text
 skills_store/
-+-- browser/            项目内置 bundled skill
-+-- calculator/         项目内置 bundled skill
-+-- data_operations/    项目内置 bundled skill
-+-- memory_manager/     项目内置 bundled skill
-+-- note_manager/       项目内置 bundled skill
-+-- time_manager/       项目内置 bundled skill
-+-- weather/            项目内置 bundled skill
-+-- installed/          运行时安装的 managed skills，可卸载
-+-- .staging/           等待审批的本地 ZIP 导入暂存目录
++-- README.md
++-- installed/   运行时安装的 managed skills
++-- .staging/    等待审批的本地 ZIP 导入暂存区
 ```
 
-## 约定
+`installed/` 与 `.staging/` 是运行时目录，内容不应作为默认内置能力提交。
 
-- 根目录下现有技能视为 bundled skills，由项目代码直接维护
-- `installed/` 只放运行时安装的技能，前端允许对它们执行卸载
-- `.staging/` 只做审批前暂存，不参与正常扫描
-- 新增 bundled skill 时，在根目录直接建子目录，并补对应 `README.md`
-- 不要把运行时产物提交到仓库；相关目录应由 `.gitignore` 忽略
+## 维护约定
+
+- 新增默认内置 skill 前，先确认它是否真的应该随项目分发。
+- SkillHub 安装的 skill 会被转换为本地 `skill.json` + `SKILL.md` 结构。
+- 删除、移动、重命名这里的目录时，同步更新 `app/skills/README.md`。

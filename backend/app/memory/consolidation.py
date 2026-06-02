@@ -1,10 +1,23 @@
-from dataclasses import asdict, dataclass
-from typing import Optional
+from __future__ import annotations
 
+import json
+import re
+from dataclasses import asdict, dataclass
+from typing import Any, Optional
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger import get_logger
+from app.memory.artifacts import (
+    MemoryArtifactCandidate,
+    MemoryArtifactDecision,
+    MemoryArtifactManager,
+    candidate_asdict,
+)
 from app.memory.facts import ProfileFactsManager
+from app.memory.history import HistoryManager
 
 
 logger = get_logger(__name__)
@@ -32,25 +45,46 @@ class ConsolidationDecision:
 
 
 class MemoryConsolidationService:
+    """Extracts durable memory artifacts from chat turns.
+
+    The service follows a Sebastian-style shape: first produce candidate artifacts
+    from the conversation window, then validate/resolve/persist them through local
+    managers. LLM output never mutates storage directly.
+    """
+
     def __init__(self, db: AsyncSession, user_id: str):
         self.db = db
         self.user_id = user_id
         self.facts_manager = ProfileFactsManager(db, user_id)
+        self.history_manager = HistoryManager(db, user_id)
+        self.artifacts = MemoryArtifactManager(db, user_id)
 
     async def consolidate_chat_turn(
         self,
         *,
         user_input: str,
         session_id: Optional[str] = None,
+        assistant_content: str = "",
+        llm: BaseChatModel | None = None,
     ) -> dict[str, object]:
-        del session_id
+        messages = []
+        if session_id:
+            messages = await self.history_manager.get_messages_by_session(session_id, limit=16)
 
-        candidates = self._extract_candidates(user_input)
+        artifact_candidates = await self._extract_artifact_candidates(
+            user_input=user_input,
+            assistant_content=assistant_content,
+            session_id=session_id,
+            messages=messages,
+            llm=llm,
+        )
+        profile_candidates = self._profile_candidates_from_artifacts(artifact_candidates)
+
         saved: list[dict[str, str]] = []
         skipped: list[dict[str, str]] = []
-        decisions: list[dict[str, object]] = []
+        profile_decisions: list[dict[str, object]] = []
 
-        for candidate in candidates:
+        for candidate in profile_candidates:
             existing = await self.facts_manager.get_fact(candidate.key)
             normalized_existing = self._normalize_value(existing.value) if existing else ""
             normalized_candidate = self._normalize_value(candidate.value)
@@ -73,7 +107,7 @@ class MemoryConsolidationService:
                         "reason": "duplicate_value",
                     }
                 )
-                decisions.append(asdict(decision))
+                profile_decisions.append(asdict(decision))
                 continue
 
             fact = await self.facts_manager.add_fact(
@@ -90,7 +124,7 @@ class MemoryConsolidationService:
                     "category": fact.category or "",
                 }
             )
-            decisions.append(
+            profile_decisions.append(
                 asdict(
                     ConsolidationDecision(
                         action="save",
@@ -104,19 +138,189 @@ class MemoryConsolidationService:
                 )
             )
 
+        artifact_decisions = await self.artifacts.process_candidates(
+            artifact_candidates,
+            session_id=session_id,
+        )
+
         if saved:
-            logger.info("Consolidated %s long-term memory candidates", len(saved))
+            logger.info("Consolidated %s long-term profile memory candidates", len(saved))
+        accepted_artifacts = [
+            decision for decision in artifact_decisions if decision.action in {"add", "update"}
+        ]
+        if accepted_artifacts:
+            logger.info("Consolidated %s memory artifacts", len(accepted_artifacts))
 
         return {
-            "candidate_count": len(candidates),
-            "applied_count": len(saved),
+            "candidate_count": len(profile_candidates),
+            "artifact_candidate_count": len(artifact_candidates),
+            "applied_count": len(saved) + len(accepted_artifacts),
             "saved": saved,
             "skipped": skipped,
-            "decisions": decisions,
-            "extractor_version": "v2",
+            "decisions": profile_decisions,
+            "artifact_candidates": [candidate_asdict(candidate) for candidate in artifact_candidates],
+            "artifact_decisions": [asdict(decision) for decision in artifact_decisions],
+            "extractor_version": "v3_artifact_consolidation",
         }
 
-    def _extract_candidates(self, user_input: str) -> list[ConsolidationCandidate]:
+    async def _extract_artifact_candidates(
+        self,
+        *,
+        user_input: str,
+        assistant_content: str,
+        session_id: Optional[str],
+        messages: list[Any],
+        llm: BaseChatModel | None,
+    ) -> list[MemoryArtifactCandidate]:
+        if llm is not None:
+            llm_candidates = await self._extract_with_llm(
+                llm,
+                user_input=user_input,
+                assistant_content=assistant_content,
+                messages=messages,
+            )
+            if llm_candidates:
+                return llm_candidates
+
+        return self._extract_with_rules(
+            user_input=user_input,
+            assistant_content=assistant_content,
+            session_id=session_id,
+            messages=messages,
+        )
+
+    async def _extract_with_llm(
+        self,
+        llm: BaseChatModel,
+        *,
+        user_input: str,
+        assistant_content: str,
+        messages: list[Any],
+    ) -> list[MemoryArtifactCandidate]:
+        window = self._conversation_window_text(
+            messages,
+            fallback_user=user_input,
+            fallback_assistant=assistant_content,
+        )
+        try:
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are a memory extractor for Serana. Extract only durable, useful memory artifacts. "
+                            "Return JSON only with this schema: "
+                            '{"artifacts":[{"kind":"fact|preference|summary|episode","title":"","content":"",'
+                            '"key":"","value":"","category":"","confidence":0.0,"evidence":""}]}. '
+                            "Use summary for a high-density session summary, episode for a concrete event or task outcome, "
+                            "fact/preference for stable user information. Do not copy raw user:/assistant: transcripts."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"Conversation window:\n{window}\n\n"
+                            "Extract memory candidates now."
+                        )
+                    ),
+                ]
+            )
+        except Exception:
+            logger.exception("LLM memory extraction failed")
+            return []
+
+        parsed = self._parse_json_object(str(response.content))
+        raw_artifacts = parsed.get("artifacts") if isinstance(parsed, dict) else None
+        if not isinstance(raw_artifacts, list):
+            return []
+
+        candidates: list[MemoryArtifactCandidate] = []
+        for raw in raw_artifacts:
+            if not isinstance(raw, dict):
+                continue
+            candidate = self._candidate_from_mapping(raw, source="llm_consolidation")
+            if candidate:
+                candidates.append(candidate)
+        return candidates
+
+    def _extract_with_rules(
+        self,
+        *,
+        user_input: str,
+        assistant_content: str,
+        session_id: Optional[str],
+        messages: list[Any],
+    ) -> list[MemoryArtifactCandidate]:
+        del session_id
+        candidates: list[MemoryArtifactCandidate] = []
+
+        for profile_candidate in self._extract_profile_candidates(user_input):
+            kind = "preference" if profile_candidate.category == "preference" else "fact"
+            candidates.append(
+                MemoryArtifactCandidate(
+                    kind=kind,
+                    title="用户偏好" if kind == "preference" else "用户事实",
+                    key=profile_candidate.key,
+                    value=profile_candidate.value,
+                    category=profile_candidate.category,
+                    content=f"{profile_candidate.key}: {profile_candidate.value}",
+                    confidence=profile_candidate.confidence,
+                    source=profile_candidate.source,
+                    evidence=profile_candidate.evidence,
+                )
+            )
+
+        summary = self._build_rule_summary(messages, user_input=user_input, assistant_content=assistant_content)
+        if summary:
+            candidates.append(
+                MemoryArtifactCandidate(
+                    kind="summary",
+                    title="会话摘要",
+                    content=summary,
+                    confidence=0.72,
+                    source="rule_consolidation",
+                )
+            )
+
+        episode = self._build_rule_episode(user_input=user_input, assistant_content=assistant_content)
+        if episode:
+            candidates.append(
+                MemoryArtifactCandidate(
+                    kind="episode",
+                    title=self._episode_title(user_input),
+                    content=episode,
+                    confidence=0.68,
+                    source="rule_consolidation",
+                    evidence=user_input,
+                )
+            )
+
+        return candidates
+
+    def _profile_candidates_from_artifacts(
+        self,
+        candidates: list[MemoryArtifactCandidate],
+    ) -> list[ConsolidationCandidate]:
+        profile_candidates: list[ConsolidationCandidate] = []
+        for candidate in candidates:
+            kind = candidate.normalized_kind()
+            if kind not in {"fact", "preference"}:
+                continue
+            key = candidate.key.strip() or self._infer_profile_key(candidate)
+            value = candidate.value.strip() or candidate.normalized_content()
+            if not key or not value:
+                continue
+            profile_candidates.append(
+                ConsolidationCandidate(
+                    key=key,
+                    value=value,
+                    category=candidate.category.strip() or ("preference" if kind == "preference" else "profile"),
+                    source=candidate.source,
+                    confidence=candidate.confidence,
+                    evidence=candidate.evidence,
+                )
+            )
+        return profile_candidates
+
+    def _extract_profile_candidates(self, user_input: str) -> list[ConsolidationCandidate]:
         text = user_input.strip()
         if not text:
             return []
@@ -166,12 +370,108 @@ class MemoryConsolidationService:
         return list(deduped.values())
 
     @staticmethod
+    def _candidate_from_mapping(raw: dict[str, Any], *, source: str) -> MemoryArtifactCandidate | None:
+        content = str(raw.get("content") or raw.get("summary") or "").strip()
+        key = str(raw.get("key") or "").strip()
+        value = str(raw.get("value") or "").strip()
+        if not content and not value:
+            return None
+        try:
+            confidence = float(raw.get("confidence") or 0.75)
+        except (TypeError, ValueError):
+            confidence = 0.75
+        return MemoryArtifactCandidate(
+            kind=str(raw.get("kind") or "").strip().lower(),
+            title=str(raw.get("title") or "").strip(),
+            content=content,
+            key=key,
+            value=value,
+            category=str(raw.get("category") or "").strip(),
+            confidence=confidence,
+            source=source,
+            evidence=str(raw.get("evidence") or "").strip(),
+            metadata=dict(raw.get("metadata") or {}) if isinstance(raw.get("metadata"), dict) else {},
+        )
+
+    @staticmethod
+    def _parse_json_object(raw_text: str) -> dict[str, Any]:
+        text = str(raw_text or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not match:
+                return {}
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _conversation_window_text(
+        messages: list[Any],
+        *,
+        fallback_user: str,
+        fallback_assistant: str,
+    ) -> str:
+        if messages:
+            lines = []
+            for message in messages[-16:]:
+                role = str(getattr(message, "role", "") or "message")
+                content = str(getattr(message, "content", "") or "").strip()
+                if content:
+                    lines.append(f"{role}: {content[:1200]}")
+            if lines:
+                return "\n".join(lines)
+        return f"user: {fallback_user}\nassistant: {fallback_assistant}"
+
+    @staticmethod
+    def _build_rule_summary(messages: list[Any], *, user_input: str, assistant_content: str) -> str:
+        if messages:
+            user_messages = [
+                str(getattr(message, "content", "") or "").strip()
+                for message in messages
+                if getattr(message, "role", "") == "user" and str(getattr(message, "content", "") or "").strip()
+            ]
+            assistant_messages = [
+                str(getattr(message, "content", "") or "").strip()
+                for message in messages
+                if getattr(message, "role", "") == "assistant" and str(getattr(message, "content", "") or "").strip()
+            ]
+            if user_messages or assistant_messages:
+                latest_user = user_messages[-1] if user_messages else user_input
+                latest_assistant = assistant_messages[-1] if assistant_messages else assistant_content
+                return (
+                    f"用户最近关注：{latest_user[:180]}。"
+                    f"Serana 已回应/处理：{latest_assistant[:260]}。"
+                )
+        if user_input and assistant_content:
+            return f"用户最近关注：{user_input[:180]}。Serana 已回应/处理：{assistant_content[:260]}。"
+        return ""
+
+    @staticmethod
+    def _build_rule_episode(*, user_input: str, assistant_content: str) -> str:
+        if not user_input or not assistant_content:
+            return ""
+        return f"用户请求：{user_input[:240]}。处理结果：{assistant_content[:420]}。"
+
+    @staticmethod
+    def _episode_title(user_input: str) -> str:
+        title = str(user_input or "").strip().replace("\n", " ")
+        return title[:40] or "经历片段"
+
+    @staticmethod
     def _extract_after_prefix(text: str, prefixes: list[str]) -> str:
         for prefix in prefixes:
             if not text.startswith(prefix):
                 continue
-            value = text[len(prefix):].strip()
-            value = value.strip(" ，。！？；：,.!?;:")
+            value = text[len(prefix) :].strip()
+            value = value.strip(" ，。！；：?.!?;:")
             if value:
                 return value
         return ""
@@ -188,6 +488,17 @@ class MemoryConsolidationService:
         ):
             return "preferred_food"
         return "preferred_item"
+
+    @staticmethod
+    def _infer_profile_key(candidate: MemoryArtifactCandidate) -> str:
+        if candidate.category:
+            return candidate.category
+        content = candidate.normalized_content().lower()
+        if "住在" in content or "home" in content:
+            return "home_city"
+        if candidate.normalized_kind() == "preference":
+            return MemoryConsolidationService._infer_preference_key(content)
+        return "profile_fact"
 
     @staticmethod
     def _normalize_value(value: str) -> str:

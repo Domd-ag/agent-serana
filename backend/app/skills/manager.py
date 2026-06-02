@@ -328,8 +328,8 @@ class SkillManager:
         return "managed" if self._is_within(skill_path.resolve(), self.managed_skills_path.resolve()) else "bundled"
 
     def _get_source_label(self, origin: str, manifest: SkillPackageManifest) -> str:
-        if manifest.source_url and "clawhub.ai" in manifest.source_url:
-            return "ClawHub 市场"
+        if manifest.source_url and "skillhub" in manifest.source_url:
+            return "SkillHub 市场"
         if origin == "managed":
             return "本地导入"
         return "项目内置"
@@ -337,7 +337,7 @@ class SkillManager:
     def _get_trust_state(self, origin: str, manifest: SkillPackageManifest) -> str:
         if origin == "bundled":
             return "trusted"
-        if manifest.source_url and "clawhub.ai" in manifest.source_url:
+        if manifest.source_url and "skillhub" in manifest.source_url:
             return "marketplace"
         return "local"
 

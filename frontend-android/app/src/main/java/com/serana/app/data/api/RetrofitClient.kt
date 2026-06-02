@@ -81,6 +81,9 @@ object RetrofitClient {
                     "content" -> {
                         onEvent(ChatStreamEvent.Content((event.content as? String).orEmpty()))
                     }
+                    "thinking" -> {
+                        onEvent(ChatStreamEvent.Thinking((event.content as? String).orEmpty()))
+                    }
                     "approval_requested" -> {
                         val approvalRequest = gson.fromJson(gson.toJsonTree(event.content), ApprovalRequestDto::class.java)
                         onEvent(ChatStreamEvent.ApprovalRequested(approvalRequest))
@@ -88,6 +91,10 @@ object RetrofitClient {
                     "approval_resolved" -> {
                         val decision = gson.fromJson(gson.toJsonTree(event.content), ApprovalResponseDto::class.java)
                         onEvent(ChatStreamEvent.ApprovalResolved(decision))
+                    }
+                    "tool_call" -> {
+                        val toolCall = gson.fromJson(gson.toJsonTree(event.content), ToolCallDto::class.java)
+                        onEvent(ChatStreamEvent.ToolCall(toolCall))
                     }
                     "done" -> {
                         val fallbackSessionId = if (event.content is Map<*, *>) {
@@ -103,6 +110,9 @@ object RetrofitClient {
                             )
                         )
                     }
+                    "error" -> {
+                        onEvent(ChatStreamEvent.Error(event.content?.toString().orEmpty()))
+                    }
                 }
             }
         }
@@ -111,9 +121,12 @@ object RetrofitClient {
 
 sealed interface ChatStreamEvent {
     data class ThinkingBlock(val block: ThinkingBlockDto) : ChatStreamEvent
+    data class Thinking(val summary: String) : ChatStreamEvent
     data class Content(val chunk: String) : ChatStreamEvent
     data class ApprovalRequested(val request: ApprovalRequestDto) : ChatStreamEvent
     data class ApprovalResolved(val response: ApprovalResponseDto) : ChatStreamEvent
+    data class ToolCall(val toolCall: ToolCallDto) : ChatStreamEvent
+    data class Error(val message: String) : ChatStreamEvent
     data class Done(
         val sessionId: String,
         val thinkingBlocks: List<ThinkingBlockDto> = emptyList(),

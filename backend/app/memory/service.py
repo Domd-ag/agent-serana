@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.memory.consolidation import MemoryConsolidationService
+from app.memory.artifacts import MemoryArtifactManager
 from app.memory.facts import ProfileFactsManager
 from app.memory.history import HistoryManager
 from app.memory.injector import MemoryInjector
@@ -21,6 +22,7 @@ class MemoryService:
         self.user_id = user_id
         self.facts = ProfileFactsManager(db, user_id)
         self.history = HistoryManager(db, user_id)
+        self.artifacts = MemoryArtifactManager(db, user_id)
         self.resident = ResidentMemoryManager(db, user_id)
         self.working = WorkingMemoryManager(db, user_id)
         self.retriever = MemoryRetriever(db, user_id)
@@ -90,10 +92,14 @@ class MemoryService:
         *,
         user_input: str,
         session_id: Optional[str] = None,
+        assistant_content: str = "",
+        llm: Any = None,
     ) -> dict[str, object]:
         return await self.consolidation.consolidate_chat_turn(
             user_input=user_input,
             session_id=session_id,
+            assistant_content=assistant_content,
+            llm=llm,
         )
 
     async def save_memory(
@@ -145,7 +151,7 @@ class MemoryService:
         retrieved = await self.retriever.retrieve(
             query=query,
             limit=safe_limit,
-            memory_types=["facts", "history"],
+            memory_types=["facts", "preferences", "summaries", "episodes"],
         )
 
         results: List[Dict[str, Any]] = []
@@ -191,6 +197,14 @@ class MemoryService:
                 "query": query,
                 "results": [],
                 "summary": "我暂时没有找到相关记忆。",
+            }
+
+        direct_summary = self._format_memory_search_summary(query, results)
+        if direct_summary:
+            return {
+                "query": query,
+                "results": results,
+                "summary": direct_summary,
             }
 
         summary_lines = ["我找到了这些相关记忆："]
@@ -259,6 +273,37 @@ class MemoryService:
     @staticmethod
     def _normalize_text(value: str) -> str:
         return "".join(ch.lower() for ch in value if not ch.isspace())
+
+    @staticmethod
+    def _format_memory_search_summary(query: str, results: list[dict[str, Any]]) -> str:
+        if not results:
+            return ""
+        text = str(query or "").lower()
+        top_type = str(results[0].get("memory_type") or "").lower()
+        should_answer_directly = any(
+            keyword in text for keyword in ("多少", "什么", "哪", "what", "which", "how much")
+        ) or top_type in {"resident", "fact", "preference"}
+        if not should_answer_directly:
+            return ""
+
+        top_content = str(results[0].get("content") or "").strip()
+        if not top_content:
+            return ""
+
+        content = top_content
+        for prefix in ("preference:", "fact:", "resident:"):
+            if content.lower().startswith(prefix):
+                content = content[len(prefix) :].strip()
+
+        separator = " = " if " = " in content else (": " if ": " in content else "")
+        if separator:
+            key, value = content.split(separator, 1)
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                return f"你之前说过：{key} 是 {value}。"
+
+        return f"我记得：{content}"
 
     @classmethod
     def _score_match(cls, query: str, content: str) -> float:

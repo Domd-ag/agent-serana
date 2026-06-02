@@ -5,13 +5,12 @@
 ## 文件职责
 
 - `ApiService.kt`
-  - Retrofit 接口定义
-  - 普通 JSON 请求
-  - multipart 上传技能 ZIP
+  - 定义 Retrofit 接口。
+  - 包含普通 JSON 请求和技能 ZIP 的 multipart 上传。
 - `RetrofitClient.kt`
-  - Retrofit / OkHttp 初始化
-  - 流式聊天事件解析
-  - artifact URL 拼接
+  - 负责 Retrofit / OkHttp 初始化。
+  - 负责流式聊天 SSE 事件解析。
+  - 负责 artifact URL 拼接和下载地址组装。
 
 ## 当前技能相关接口
 
@@ -23,16 +22,18 @@
 - `POST /skills/{skillName}/update`
 - `DELETE /skills/{skillName}`
 - `POST /skills/marketplace/install`
-- `POST /skills/upload`（multipart，本地 ZIP 导入）
-
-## 维护约定
-
-- 后端返回结构变化时，先同步这里的 DTO
-- 如果是文件上传或下载，优先在这里明确协议形式，再交给 ViewModel 调用
+- `POST /skills/upload`
 
 ## 流式聊天
 
-- RetrofitClient.streamChatMessage 使用专用 OkHttp client，SSE 读取不设置 30 秒 readTimeout，用来承载 HTML 演示生成、审批等待等长任务。
-- `done` 事件会直接携带后端最终的 `thinking_blocks` 和 `tool_calls`，ViewModel 可以先把工具卡片和演示 artifact 放进当前消息，再用 debug 接口做最终补水。
-- Audit insights 使用 `planning_stages` 表示后端 planning flow 阶段。
-- Audit insights 也包含 `tool_result_names`、`tool_result_statuses`、`tool_result_schema_versions` 和 `artifact_kinds`，用于按统一工具结果协议展示或调试。
+- `RetrofitClient.streamChatMessage` 使用专用 OkHttp client，SSE 读取不设置 30 秒 `readTimeout`，用来承载 HTML 演示生成、浏览器观察、审批等待等长任务。
+- 当前支持的事件包括 `thinking`、`thinking_block`、`content`、`approval_requested`、`approval_resolved`、`tool_call`、`error`、`done`。
+- `tool_call` 会在后端工具完成时即时到达，ViewModel 可以先把浏览器打开、观察、点击等步骤显示到当前消息里。
+- `done` 事件仍会携带最终 `thinking_blocks` 和 `tool_calls`，ViewModel 需要按 id 去重合并，再用 debug 接口校准落库后的最终消息。
+- audit insights 包含 `planning_stages`、`tool_result_names`、`tool_result_statuses`、`tool_result_schema_versions` 和 `artifact_kinds`，用于调试统一工具结果协议。
+
+## 维护约定
+
+- 后端返回结构变化时，先同步这里的 DTO。
+- 新增流式事件时，同步检查 `RetrofitClient`、`ChatViewModel` 和聊天页展示逻辑。
+- 文件上传、下载或 artifact 访问优先先在这里明确协议形式，再交给 ViewModel 调用。

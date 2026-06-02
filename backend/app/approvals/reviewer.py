@@ -80,7 +80,7 @@ class ApprovalReviewer:
             version_suffix = f"（版本 {version}）" if version else ""
             return (
                 "确认安装远程技能",
-                f"Serana 想从 ClawHub 安装“{slug}”{version_suffix}。",
+                f"Serana 想从 SkillHub 安装“{slug}”{version_suffix}。",
             )
 
         if tool_name == "skills.local.install":

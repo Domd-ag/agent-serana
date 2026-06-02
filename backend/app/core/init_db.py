@@ -15,6 +15,7 @@ async def init_db():
         await migrate_profile_facts_table(conn)
         await migrate_messages_table(conn)
         await migrate_goals_table(conn)
+        await ensure_memory_artifacts_table(conn)
         await ensure_working_memories_table(conn)
     logger.info("Database tables created successfully!")
 
@@ -96,6 +97,54 @@ async def ensure_working_memories_table(conn):
             """
         )
     )
+
+
+async def ensure_memory_artifacts_table(conn):
+    result = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts'")
+    )
+    table_name = result.scalar_one_or_none()
+    if not table_name:
+        logger.info("Creating missing table 'memory_artifacts'")
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE memory_artifacts (
+                    id VARCHAR PRIMARY KEY,
+                    user_id VARCHAR NOT NULL,
+                    session_id VARCHAR,
+                    kind VARCHAR NOT NULL,
+                    title VARCHAR,
+                    content TEXT NOT NULL,
+                    artifact_metadata TEXT,
+                    confidence FLOAT NOT NULL DEFAULT 0.8,
+                    source VARCHAR,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+                """
+            )
+        )
+        return
+
+    result = await conn.execute(text("PRAGMA table_info(memory_artifacts)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    column_statements = {
+        "session_id": "ALTER TABLE memory_artifacts ADD COLUMN session_id VARCHAR",
+        "title": "ALTER TABLE memory_artifacts ADD COLUMN title VARCHAR",
+        "artifact_metadata": "ALTER TABLE memory_artifacts ADD COLUMN artifact_metadata TEXT",
+        "confidence": "ALTER TABLE memory_artifacts ADD COLUMN confidence FLOAT NOT NULL DEFAULT 0.8",
+        "source": "ALTER TABLE memory_artifacts ADD COLUMN source VARCHAR",
+        "is_active": "ALTER TABLE memory_artifacts ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
+        "updated_at": "ALTER TABLE memory_artifacts ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+    }
+
+    for column_name, statement in column_statements.items():
+        if column_name not in existing_columns:
+            logger.info("Adding missing column '%s' to memory_artifacts", column_name)
+            await conn.execute(text(statement))
 
 
 async def create_default_user(session: AsyncSession):

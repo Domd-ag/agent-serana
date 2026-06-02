@@ -1,4 +1,4 @@
-import json
+﻿import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -651,8 +651,8 @@ class FakeMarketplaceClient:
                     summary="Get current weather and forecasts.",
                     version="1.0.0",
                     ownerHandle="steipete",
-                    canonical_url="https://clawhub.ai/steipete/weather",
-                    download_url="https://clawhub.ai/api/v1/download?slug=weather",
+                    canonical_url="https://skillhub.cn/skills/weather",
+                    download_url="https://api.skillhub.cn/api/v1/download?slug=weather",
                     installed=manager.get_skill("weather") is not None,
                     local_skill_name="weather" if manager.get_skill("weather") is not None else None,
                 )
@@ -667,18 +667,46 @@ class FakeMarketplaceClient:
             "slug": slug,
             "display_name": "Weather",
             "summary": "Get current weather and forecasts.",
-            "owner_handle": "steipete",
-            "owner_display_name": "Peter",
+            "owner_handle": "skillhub",
+            "owner_display_name": "SkillHub",
             "latest_version": "1.0.0",
-            "canonical_url": "https://clawhub.ai/steipete/weather",
-            "download_url": "https://clawhub.ai/api/v1/download?slug=weather",
+            "canonical_url": "https://skillhub.cn/skills/weather",
+            "download_url": "https://api.skillhub.cn/api/v1/download?slug=weather",
             "skill_md_preview": "# Weather",
             "installed": manager.get_skill("weather") is not None,
             "local_skill_name": "weather" if manager.get_skill("weather") is not None else None,
         }
 
     def install_skill(self, slug: str, manager: SkillManager, version=None, tag=None):
-        return manager.get_skill("weather")
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            skill_dir = temp_dir / "weather"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "skill.json").write_text(
+                json.dumps(
+                    {
+                        "name": "weather",
+                        "version": version or "1.0.0",
+                        "description": "Get current weather and forecasts.",
+                        "author": "SkillHub",
+                        "format": "sebastian_package",
+                        "runtime": "instruction",
+                        "instruction_file": "SKILL.md",
+                        "entrypoint": None,
+                        "registry_slug": slug,
+                        "source_url": "https://skillhub.cn/skills/weather",
+                        "agent_type": "all",
+                        "max_instances": 1,
+                        "tools": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text("# Weather\nUse weather data when asked.", encoding="utf-8")
+            return manager.install_skill_from_directory(skill_dir)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def create_test_skill_archive(skill_name: str, version: str = "0.1.0") -> tuple[Path, bytes]:
@@ -1768,7 +1796,7 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
             name="travel_helper",
             description="Help with calm, low-stress travel planning.",
             instruction_content="# Travel Helper\nPrefer calm pacing, buffer time, and low-stress suggestions.",
-            manifest=SimpleNamespace(source_url="https://clawhub.ai/demo/travel-helper"),
+            manifest=SimpleNamespace(source_url="https://skillhub.cn/skills/travel-helper"),
         )
 
         with patch.object(SkillManager, "get_enabled_instruction_skills", return_value=[fake_instruction_skill]):
@@ -1797,8 +1825,8 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertEqual(len(payload["results"]), 1)
         self.assertEqual(payload["results"][0]["slug"], "weather")
-        self.assertTrue(payload["results"][0]["installed"])
-        self.assertEqual(payload["results"][0]["local_skill_name"], "weather")
+        self.assertFalse(payload["results"][0]["installed"])
+        self.assertIsNone(payload["results"][0]["local_skill_name"])
 
     async def test_marketplace_install_returns_local_skill_package(self):
         app.dependency_overrides[get_marketplace_client] = lambda: FakeMarketplaceClient()
@@ -1965,7 +1993,7 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
             name="travel_helper",
             description="Help with calm, low-stress travel planning.",
             instruction_content="# Travel Helper\nPrefer calm pacing, buffer time, and low-stress suggestions.",
-            manifest=SimpleNamespace(source_url="https://clawhub.ai/demo/travel-helper"),
+            manifest=SimpleNamespace(source_url="https://skillhub.cn/skills/travel-helper"),
         )
 
         with patch.object(SkillManager, "get_enabled_instruction_skills", return_value=[fake_instruction_skill]):

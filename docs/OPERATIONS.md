@@ -1,8 +1,8 @@
-# Serana 运行维护说明
+# 运行与维护说明
 
-这份文档记录本地运行、配置、日志和发布前检查流程。
+这份文档记录 Serana 后端的日常运行、配置和排查入口。
 
-## 本地启动
+## 启动
 
 推荐在项目根目录运行：
 
@@ -10,88 +10,41 @@
 start-backend.bat
 ```
 
-脚本会检查 `backend/.env`、`backend/venv` 和依赖，然后启动后端服务。
-
-手动启动方式：
+手动启动后端：
 
 ```powershell
 cd backend
-venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## 配置文件
+## 常用配置
 
-后端配置集中在 `backend/.env`。新环境可以先复制：
-
-```powershell
-Copy-Item backend\.env.example backend\.env
-```
-
-常用配置：
-
-- `LOG_LEVEL`：日志级别。排查问题用 `DEBUG`，日常使用建议 `INFO`。
-- `DATABASE_URL`：数据库连接。默认 SQLite。
+- `LOG_LEVEL`：日志级别。排查问题用 `DEBUG`，日常运行建议 `INFO`。
+- `DATABASE_URL`：数据库连接，默认 SQLite。
 - `DEFAULT_LLM_PROVIDER` / `DEFAULT_LLM_API_KEY` / `DEFAULT_LLM_BASE_URL` / `DEFAULT_LLM_MODEL`：默认 LLM 配置。
 - `HOST` / `PORT`：服务监听地址。
 - `CORS_ALLOW_ORIGINS`：允许访问后端的前端来源。
-- `CLAWHUB_BASE_URL`：ClawHub 市场地址。
+- `SKILLHUB_BASE_URL`：SkillHub API 地址，默认 `https://api.skillhub.cn`。
+- `SKILLHUB_PUBLIC_BASE_URL`：SkillHub 站点地址，默认 `https://skillhub.cn`。
 
-## 健康检查
+## 技能维护
 
-- `GET /health`：服务状态和版本。
-- `GET /docs`：FastAPI Swagger 文档。
-- `GET /api/v1/skills`：确认 skill 管理器完成初始化。
+- 支持 SkillHub 市场搜索、安装、更新。
+- 支持本地 ZIP 导入。
+- 支持启用、停用、卸载。
+- 生命周期状态会展示来源、信任状态和生效范围。
 
-## 日志
+## 编码约定
 
-日志按命名空间区分：
+- 仓库文本文件统一使用 UTF-8。
+- `.editorconfig` 和 `.gitattributes` 已声明默认编码与换行策略。
+- 批量修改中文文件时，不要再用 PowerShell 5.1 默认的 `Get-Content` / `Set-Content` 直接改写无 BOM 的 UTF-8 文件。
+- 手工改文件优先使用补丁方式；需要脚本处理时，必须显式指定 UTF-8 读写。
 
-- `app.startup.*`：启动、初始化、关闭。
-- `app.request.*`：HTTP 请求链路。
-- `app.tool.*`：工具、skill、浏览器动作。
+## 排查顺序
 
-如果终端输出太吵，优先把 `LOG_LEVEL` 调成 `INFO` 或 `WARNING`。
-
-## Skill 生命周期
-
-当前支持：
-
-- 本地 bundled skill 扫描加载。
-- ClawHub 市场搜索、安装、更新。
-- 本地 ZIP 导入。
-- 启用 / 停用。
-- managed skill 卸载。
-- 来源、信任状态、生效范围展示。
-- 生效范围修改。
-
-高风险或会改变本地能力的动作会进入审批流。
-
-## 发布前检查
-
-1. 后端测试：
-
-```powershell
-cd backend
-venv\Scripts\python.exe -m unittest test_api_flows.py
-```
-
-2. Android 编译：
-
-```powershell
-cd frontend-android
-C:\Users\ASUS\gradle\gradle-8.2\bin\gradle.bat :app:compileDebugKotlin
-```
-
-3. 文档检查：
-
-- 根目录 `README.md`
-- `backend/README.md`
-- `frontend-android/README.md`
-- 受影响目录的 `README.md`
-- `docs/SEBASTIAN_BACKEND_ROADMAP.md`
-
-4. Git 状态检查：
-
-```powershell
-git status --short
-```
+1. 看后端日志里是否有请求、工具或 LLM 网关错误。
+2. 用 `/docs` 检查接口是否可访问。
+3. 用 `/api/v1/skills/marketplace/search?q=weather` 验证 SkillHub 搜索。
+4. 用 Android 设置页确认后端地址是否指向当前机器的局域网 IP。
+5. 如果是流式聊天问题，优先检查 `/api/v1/chat/message` 的 SSE 事件输出。

@@ -121,6 +121,7 @@ import com.serana.app.viewmodel.ChatViewModel
 import com.serana.app.viewmodel.SettingsViewModel
 import com.serana.app.viewmodel.SkillsViewModel
 import java.time.LocalDate
+import java.time.Duration
 import java.time.OffsetDateTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -735,7 +736,6 @@ private fun DrawerMenuPanel(
         }
     }
 }
-
 private fun isNearBottom(
     listState: LazyListState,
     bottomAnchorIndex: Int,
@@ -764,7 +764,7 @@ private fun SkillsOverlayDialog(
 
     OverlayDialogScaffold(
         title = "技能",
-        subtitle = "从 ClawHub 安装新技能，或管理已安装技能。",
+        subtitle = "从 SkillHub 安装新技能，或管理已安装技能。",
         onDismiss = onDismiss,
     ) {
         SkillSourceSelector(
@@ -852,7 +852,7 @@ private fun SkillsOverlayDialog(
         ) {
             OverlaySection(
                 title = "远程技能",
-                subtitle = "从 ClawHub 浏览并安装新的技能。",
+                subtitle = "从 SkillHub 浏览并安装新的技能。",
             ) {
                 OutlinedTextField(
                     value = marketplaceQuery,
@@ -1288,7 +1288,7 @@ private fun SkillSourceSelector(
     onSelectMarketplace: () -> Unit,
 ) {
     val description = if (showMarketplace) {
-        "从 ClawHub 浏览并安装新的技能。"
+        "从 SkillHub 浏览并安装新的技能。"
     } else {
         "查看当前设备上已经安装的技能。"
     }
@@ -1572,6 +1572,9 @@ private data class ExecutionStep(
     val label: String,
     val summary: String,
     val status: ExecutionStepStatus,
+    val timestamp: String = "",
+    val detail: String = "",
+    val expandable: Boolean = false,
 )
 
 @Composable
@@ -1580,7 +1583,13 @@ private fun ExecutionSummary(
     activeStreaming: Boolean,
 ) {
     var expanded by rememberSaveable(steps.joinToString("|") { "${it.label}:${it.status}" }) {
-        mutableStateOf(false)
+        mutableStateOf(steps.any { it.label.startsWith("Browser ") })
+    }
+    val thoughtSeconds = remember(steps, activeStreaming) { executionDurationSeconds(steps, activeStreaming) }
+    val title = if (activeStreaming) {
+        "Thinking"
+    } else {
+        "Thought for ${thoughtSeconds}s"
     }
     val activeStep = steps.lastOrNull { it.status == ExecutionStepStatus.RUNNING }
         ?: steps.lastOrNull()
@@ -1606,18 +1615,14 @@ private fun ExecutionSummary(
                 tint = mutedColor.copy(alpha = 0.52f),
                 modifier = Modifier.size(18.dp),
             )
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(15.dp)
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                steps.forEach { step ->
-                    ExecutionCapsule(step.status)
-                }
-            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = mutedColor.copy(alpha = 0.82f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
         }
 
         if (!expanded && activeStep != null) {
@@ -1640,7 +1645,7 @@ private fun ExecutionSummary(
         ) {
             Column(
                 modifier = Modifier.padding(start = 28.dp, top = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 steps.forEach { step ->
                     ExecutionDetailRow(step)
@@ -1668,9 +1673,12 @@ private fun ExecutionCapsule(status: ExecutionStepStatus) {
 @Composable
 private fun ExecutionDetailRow(step: ExecutionStep) {
     val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    var expanded by rememberSaveable(step.label, step.timestamp, step.detail) { mutableStateOf(false) }
+    val hasDetail = step.expandable && step.detail.isNotBlank()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
             .heightIn(min = 22.dp),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1692,13 +1700,27 @@ private fun ExecutionDetailRow(step: ExecutionStep) {
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
-            Text(
-                text = step.label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = step.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (hasDetail) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = if (expanded) "收起详情" else "展开详情",
+                        tint = mutedColor.copy(alpha = 0.45f),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             if (step.summary.isNotBlank()) {
                 Text(
                     text = step.summary,
@@ -1706,6 +1728,24 @@ private fun ExecutionDetailRow(step: ExecutionStep) {
                     color = mutedColor,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            AnimatedVisibility(
+                visible = expanded && hasDetail,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Text(
+                    text = step.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = mutedColor.copy(alpha = 0.88f),
+                    modifier = Modifier
+                        .padding(top = 6.dp, start = 10.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+                            RoundedCornerShape(6.dp),
+                        )
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                 )
             }
         }
@@ -1737,7 +1777,9 @@ private fun StreamingDots(
 private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
     if (message.role == Role.USER) return emptyList()
     val steps = mutableListOf<ExecutionStep>()
-    message.thinkingBlocks.forEach { block ->
+    message.thinkingBlocks
+        .filter(::shouldShowThinkingBlock)
+        .forEach { block ->
         steps += ExecutionStep(
             label = block.title.ifBlank { "思考" },
             summary = block.content.take(96),
@@ -1759,6 +1801,9 @@ private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
                     "running", "pending" -> ExecutionStepStatus.RUNNING
                     else -> ExecutionStepStatus.DONE
                 },
+                timestamp = trace.timestamp,
+                detail = toolDetail(trace),
+                expandable = shouldExpandToolDetail(trace),
             )
         }
     if (steps.isEmpty() && message.streamStatus in setOf(StreamStatus.THINKING, StreamStatus.STREAMING, StreamStatus.RETRYING)) {
@@ -1775,21 +1820,55 @@ private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
     return steps
 }
 
+private fun shouldShowThinkingBlock(block: ThinkingBlock): Boolean {
+    val title = block.title.lowercase()
+    val content = block.content.lowercase()
+    val internalSignals = listOf(
+        "resident memory",
+        "memory",
+        "working memory",
+        "loaded stable",
+        "loaded related profile",
+        "llm gateway",
+        "runtime",
+    )
+    return internalSignals.none { signal -> signal in title || signal in content }
+}
+
 private fun shouldShowExecutionTool(trace: ToolTrace): Boolean {
     val name = trace.name.lowercase()
-    return name !in setOf(
+    val hiddenExactNames = setOf(
         "assistant_generation",
+        "contextual_followup_assessment",
         "conversation_route",
         "serana_loop_stage",
+        "serana_contextual_reply",
+        "serana_direct_reply",
         "serana_tool_selection",
         "serana_policy_gate",
-    ) && !name.startsWith("serana_approval")
+    )
+    val hiddenPrefixes = listOf(
+        "memory_injector",
+        "resident_memory",
+        "working_memory",
+    )
+    return name !in hiddenExactNames &&
+        hiddenPrefixes.none { prefix -> name.startsWith(prefix) } &&
+        !name.startsWith("serana_approval")
 }
 
 private fun toolDisplayName(trace: ToolTrace): String {
     val name = trace.name.lowercase()
     return when {
+        name.endsWith("browser.open_page") || name == "open_page" -> "Browser Open"
+        name.endsWith("browser.observe_page") || name == "observe_page" -> "Browser Observe"
+        name.endsWith("browser.act_page") || name == "act_page" -> "Browser Act"
+        name.endsWith("browser.search_web") || name == "search_web" -> "Browser Search"
+        name.endsWith("browser.capture_page") || name == "capture_page" -> "Browser Capture"
+        name.endsWith("browser.look_page") || name == "look_page" -> "Browser Look"
+        name.endsWith("browser.browser_downloads") || name == "browser_downloads" -> "Browser Downloads"
         name.contains("create_html_preview") -> "生成演示"
+        name.contains("contextual_followup") -> "理解上下文"
         name.contains("browser") -> "浏览器"
         name.contains("weather") -> "查询天气"
         name.contains("calculator") -> "计算"
@@ -1802,9 +1881,32 @@ private fun toolDisplayName(trace: ToolTrace): String {
 
 private fun toolSummary(trace: ToolTrace): String {
     val output = trace.output as? Map<*, *>
+    val input = trace.input
     val standardResult = output?.get("tool_result") as? Map<*, *>
     val userSummary = standardResult?.get("user_summary")?.toString()?.takeIf { it.isNotBlank() }
     if (!userSummary.isNullOrBlank()) return userSummary.take(120)
+    val name = trace.name.lowercase()
+    if (name.endsWith("browser.open_page") || name == "open_page") {
+        val url = output?.get("url")?.toString()
+            ?: input["url"]?.toString()
+            ?: input["target"]?.toString()
+        if (!url.isNullOrBlank()) return url.take(120)
+    }
+    if (name.endsWith("browser.observe_page") || name == "observe_page") {
+        val title = output?.get("title")?.toString()?.takeIf { it.isNotBlank() }
+        val content = output?.get("content")?.toString()
+            ?: output?.get("text")?.toString()
+            ?: output?.get("summary")?.toString()
+        return listOfNotNull(title, content?.takeIf { it.isNotBlank() }?.take(84))
+            .joinToString("：")
+            .takeIf { it.isNotBlank() }
+            ?: "查看当前页面状态"
+    }
+    if (name.endsWith("browser.act_page") || name == "act_page") {
+        val action = input["action"]?.toString()
+            ?: output?.get("action")?.toString()
+        if (!action.isNullOrBlank()) return action.take(120)
+    }
     val summary = output?.get("summary")?.toString()?.takeIf { it.isNotBlank() }
     if (!summary.isNullOrBlank()) return summary.take(120)
     return when (trace.status.lowercase()) {
@@ -1812,6 +1914,41 @@ private fun toolSummary(trace: ToolTrace): String {
         "running", "pending" -> "正在执行…"
         else -> "已完成"
     }
+}
+
+private fun shouldExpandToolDetail(trace: ToolTrace): Boolean {
+    val name = trace.name.lowercase()
+    return name.endsWith("browser.observe_page") ||
+        name == "observe_page" ||
+        name.endsWith("browser.look_page") ||
+        name == "look_page"
+}
+
+private fun toolDetail(trace: ToolTrace): String {
+    val output = trace.output as? Map<*, *> ?: return ""
+    val content = output["content"]?.toString()
+        ?: output["text"]?.toString()
+        ?: output["summary"]?.toString()
+        ?: ""
+    return content
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+        .take(900)
+}
+
+private fun executionDurationSeconds(steps: List<ExecutionStep>, activeStreaming: Boolean): Long {
+    if (activeStreaming) return 0
+    val times = steps.mapNotNull { parseEpochSecond(it.timestamp) }
+    if (times.size < 2) return 0
+    return Duration.between(
+        java.time.Instant.ofEpochSecond(times.first()),
+        java.time.Instant.ofEpochSecond(times.last()),
+    ).seconds.coerceAtLeast(0)
+}
+
+private fun parseEpochSecond(timestamp: String): Long? {
+    if (timestamp.isBlank()) return null
+    return runCatching { OffsetDateTime.parse(timestamp).toEpochSecond() }.getOrNull()
 }
 
 private enum class MarkdownBlockKind {
@@ -2603,4 +2740,3 @@ private fun MessageInput(
         }
     }
 }
-

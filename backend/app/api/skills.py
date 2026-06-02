@@ -8,24 +8,23 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.approvals import get_approval_manager, get_approval_reviewer, get_policy_gate
-from app.core import get_db
-from app.core.config import get_settings
-from app.core import logger
+from app.core import get_db, logger
 from app.core.audit import append_audit_record
+from app.core.config import get_settings
 from app.skills import (
     MarketplaceCatalogResponse,
     MarketplaceInstallRequest,
     MarketplaceInstallResponse,
     MarketplaceSearchResponse,
     MarketplaceSkillDetail,
-    SkillManager,
     SkillLifecycleStatus,
+    SkillManager,
     SkillMutationResponse,
     SkillPackage,
     SkillScopeUpdateRequest,
     SkillUpdateRequest,
 )
-from app.skills.clawhub import ClawHubClient, ClawHubError
+from app.skills.skillhub import SkillHubClient, SkillHubError
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -41,8 +40,12 @@ def get_skill_manager() -> SkillManager:
     return manager
 
 
-def get_marketplace_client() -> ClawHubClient:
-    return ClawHubClient(base_url=get_settings().CLAWHUB_BASE_URL)
+def get_marketplace_client() -> SkillHubClient:
+    settings = get_settings()
+    return SkillHubClient(
+        base_url=settings.SKILLHUB_BASE_URL,
+        public_base_url=settings.SKILLHUB_PUBLIC_BASE_URL,
+    )
 
 
 @router.get("", response_model=List[SkillPackage])
@@ -56,11 +59,11 @@ async def list_marketplace_skills(
     cursor: Optional[str] = None,
     sort: str = "updated",
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
 ):
     try:
         return marketplace.list_skills(manager=manager, limit=limit, cursor=cursor, sort=sort)
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
@@ -69,11 +72,11 @@ async def search_marketplace_skills(
     q: str,
     limit: int = 20,
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
 ):
     try:
         return marketplace.search_skills(query=q, manager=manager, limit=limit)
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
@@ -83,11 +86,11 @@ async def get_marketplace_skill_detail(
     version: Optional[str] = None,
     tag: Optional[str] = None,
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
 ):
     try:
         return marketplace.get_skill_detail(slug=slug, manager=manager, version=version, tag=tag)
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
@@ -95,7 +98,7 @@ async def get_marketplace_skill_detail(
 async def install_marketplace_skill(
     request: MarketplaceInstallRequest,
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
     db: AsyncSession = Depends(get_db),
 ):
     policy_gate = get_policy_gate()
@@ -197,7 +200,7 @@ async def install_marketplace_skill(
             skill=skill,
             message="远程技能已安装。",
         )
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -213,7 +216,7 @@ async def get_skill(skill_name: str, manager: SkillManager = Depends(get_skill_m
 async def get_skill_lifecycle(
     skill_name: str,
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
 ):
     skill = manager.get_skill(skill_name)
     if not skill:
@@ -234,7 +237,7 @@ async def get_skill_lifecycle(
                 and latest_version
                 and _is_newer_version(latest_version, skill.version)
             )
-        except ClawHubError as exc:
+        except SkillHubError as exc:
             logger.warning("Unable to refresh lifecycle for %s: %s", skill_name, exc)
 
     return SkillLifecycleStatus(
@@ -288,7 +291,7 @@ async def update_marketplace_skill(
     skill_name: str,
     request: SkillUpdateRequest,
     manager: SkillManager = Depends(get_skill_manager),
-    marketplace: ClawHubClient = Depends(get_marketplace_client),
+    marketplace: SkillHubClient = Depends(get_marketplace_client),
     db: AsyncSession = Depends(get_db),
 ):
     skill = manager.get_skill(skill_name)
@@ -307,7 +310,7 @@ async def update_marketplace_skill(
             include_preview=False,
         )
         target_version = target_version or detail.latest_version
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
     policy_gate = get_policy_gate()
@@ -411,7 +414,7 @@ async def update_marketplace_skill(
             skill=updated_skill,
             message="远程技能已更新。",
         )
-    except ClawHubError as exc:
+    except SkillHubError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 

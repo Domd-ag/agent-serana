@@ -326,6 +326,7 @@ async def _persist_assistant_result(
     memory_context_included: bool,
     execution_mode: str,
     delegation_plan: dict,
+    llm_config: dict | None = None,
 ) -> tuple[Message, list]:
     assistant_message = Message(
         session_id=chat_session.id,
@@ -370,11 +371,22 @@ async def _persist_assistant_result(
     await db.refresh(chat_session)
 
     memory_service = MemoryService(db, user_id)
+    consolidation_llm = None
+    if llm_config:
+        try:
+            consolidation_llm = get_llm_gateway().get_llm(
+                user_config=llm_config["user_config"],
+                use_backend_default=llm_config["use_backend_default"],
+            )
+        except Exception:
+            logger.exception("Memory consolidation LLM unavailable; falling back to rule extraction")
     consolidation_result = await memory_service.consolidate_chat_turn(
         user_input=user_input,
         session_id=chat_session.id,
+        assistant_content=assistant_content,
+        llm=consolidation_llm,
     )
-    if consolidation_result["candidate_count"]:
+    if consolidation_result["candidate_count"] or consolidation_result.get("artifact_candidate_count"):
         append_audit_record(
             db,
             entity_type="chat_session",
@@ -639,6 +651,14 @@ async def send_chat_message(
                     if event_type in {"approval_requested", "approval_resolved"}:
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         continue
+                    if event_type == "tool_call":
+                        tool_call_payload = event.get("content")
+                        if isinstance(tool_call_payload, dict):
+                            tool_call = ToolCall.model_validate(tool_call_payload)
+                            if not any(existing.id == tool_call.id for existing in streamed_tool_calls):
+                                streamed_tool_calls.append(tool_call)
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        continue
                     if event_type == "done":
                         done_payload = event
                         for raw_block in event.get("thinking_blocks", []):
@@ -648,7 +668,9 @@ async def send_chat_message(
                                     streamed_thinking_blocks.append(block)
                         for raw_tool_call in event.get("tool_calls", []):
                             if isinstance(raw_tool_call, dict):
-                                streamed_tool_calls.append(ToolCall.model_validate(raw_tool_call))
+                                tool_call = ToolCall.model_validate(raw_tool_call)
+                                if not any(existing.id == tool_call.id for existing in streamed_tool_calls):
+                                    streamed_tool_calls.append(tool_call)
                         streamed_tool_calls.append(
                             ToolCall(
                                 id="assistant-generation",
@@ -665,6 +687,16 @@ async def send_chat_message(
                                 timestamp=prepared["timestamp"],
                             )
                         )
+                        done_event = {
+                            **event,
+                            "thinking_blocks": [
+                                block.model_dump() for block in streamed_thinking_blocks
+                            ],
+                            "tool_calls": [
+                                tool_call.model_dump() for tool_call in streamed_tool_calls
+                            ],
+                        }
+                        yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
                         await _persist_assistant_result(
                             db,
                             chat_session=chat_session,
@@ -676,8 +708,8 @@ async def send_chat_message(
                             memory_context_included=prepared["memory_context_included"],
                             execution_mode=str(event.get("execution_mode") or "direct"),
                             delegation_plan=dict(event.get("delegation_plan") or {}),
+                            llm_config=llm_config,
                         )
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         return
                     if event_type == "error":
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -710,6 +742,7 @@ async def send_chat_message(
                     memory_context_included=memory_context_included,
                     execution_mode=execution_mode,
                     delegation_plan=delegation_plan,
+                    llm_config=llm_config,
                 )
                 for block in thinking_blocks:
                     yield f"data: {json.dumps({'type': 'thinking_block', 'content': block.model_dump()}, ensure_ascii=False)}\n\n"
@@ -748,6 +781,7 @@ async def send_chat_message(
         memory_context_included=memory_context_included,
         execution_mode=execution_mode,
         delegation_plan=delegation_plan,
+        llm_config=llm_config,
     )
 
     response_payload = ChatCompletionResponse(

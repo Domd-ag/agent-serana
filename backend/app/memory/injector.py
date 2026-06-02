@@ -74,6 +74,7 @@ class MemoryInjector:
             try:
                 relevant_memories = await self.retriever.retrieve(
                     query=user_input,
+                    memory_types=["facts", "preferences", "summaries", "episodes"],
                     limit=5,
                     time_range=timedelta(days=7),
                 )

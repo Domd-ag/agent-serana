@@ -87,9 +87,7 @@ fun SkillsScreen(
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri == null) {
-            return@rememberLauncherForActivityResult
-        }
+        if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             val archive = withContext(Dispatchers.IO) {
                 readSkillArchiveFromUri(context, uri)
@@ -127,8 +125,7 @@ fun SkillsScreen(
             isLoading = isDetailLoading,
             error = detailError,
             isRemoving = removingSkillNames.contains(skill.name),
-            isUpdating = updatingRemoteSkillNames.contains(skill.name) ||
-                updatingSkillNames.contains(skill.name),
+            isUpdating = updatingRemoteSkillNames.contains(skill.name) || updatingSkillNames.contains(skill.name),
             onRemove = { viewModel.removeSkill(skill) },
             onUpdate = { viewModel.updateRemoteSkill(skill) },
             onScopeChange = { viewModel.updateSkillScope(skill, it) },
@@ -257,7 +254,7 @@ fun SkillsScreen(
             } else if (uiState.data.isEmpty()) {
                 EmptySkillsCard(
                     title = "还没有安装任何技能",
-                    body = "可以从 ClawHub 市场安装，也可以导入本地 ZIP 技能包。",
+                    body = "可以从 SkillHub 市场安装，也可以导入本地 ZIP 技能包。",
                 )
             } else if (filteredSkills.isEmpty()) {
                 EmptySkillsCard(
@@ -272,8 +269,7 @@ fun SkillsScreen(
                     items(filteredSkills, key = { it.id }) { skill ->
                         SkillCard(
                             skill = skill,
-                            isUpdating = updatingSkillNames.contains(skill.name) ||
-                                removingSkillNames.contains(skill.name),
+                            isUpdating = updatingSkillNames.contains(skill.name) || removingSkillNames.contains(skill.name),
                             onDetails = { viewModel.loadSkillDetail(skill) },
                             onToggle = { viewModel.toggleSkill(skill) },
                         )
@@ -301,24 +297,16 @@ private fun SkillApprovalDialog(
     AlertDialog(
         onDismissRequest = {},
         confirmButton = {
-            Button(
-                onClick = onApprove,
-                enabled = !isSubmitting,
-            ) {
-                Text(if (isSubmitting) "提交中…" else confirmLabel)
+            Button(onClick = onApprove, enabled = !isSubmitting) {
+                Text(if (isSubmitting) "提交中..." else confirmLabel)
             }
         },
         dismissButton = {
-            TextButton(
-                onClick = onDeny,
-                enabled = !isSubmitting,
-            ) {
+            TextButton(onClick = onDeny, enabled = !isSubmitting) {
                 Text(dismissLabel)
             }
         },
-        title = {
-            Text(request.title)
-        },
+        title = { Text(request.title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -407,11 +395,8 @@ private fun SkillsOverviewPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(
-                onClick = onImportZip,
-                enabled = !isUploading,
-            ) {
-                Text(if (isUploading) "导入中…" else "导入 ZIP")
+            Button(onClick = onImportZip, enabled = !isUploading) {
+                Text(if (isUploading) "导入中..." else "导入 ZIP")
             }
         }
         OutlinedTextField(
@@ -454,7 +439,7 @@ private fun MarketplacePanel(
     onInstall: (MarketplaceSkill) -> Unit,
 ) {
     PanelSurface {
-        Text("ClawHub 市场", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text("SkillHub 市场", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         Text(
             text = "导入指令型技能包，为对话和任务规划补充额外规则与知识。",
             style = MaterialTheme.typography.bodySmall,
@@ -529,7 +514,7 @@ private fun MarketplaceSkillCard(
             Button(onClick = onInstall, enabled = !isInstalling && !skill.installed) {
                 Text(
                     when {
-                        isInstalling -> "安装中…"
+                        isInstalling -> "安装中..."
                         skill.installed -> "已安装"
                         else -> "安装"
                     },
@@ -576,7 +561,7 @@ private fun SkillCard(
                 Button(onClick = onToggle, enabled = !isUpdating) {
                     Text(
                         if (isUpdating) {
-                            if (skill.isEnabled) "停用中…" else "启用中…"
+                            if (skill.isEnabled) "停用中..." else "启用中..."
                         } else if (skill.isEnabled) {
                             "停用"
                         } else {
@@ -620,11 +605,8 @@ private fun SkillDetailDialog(
         },
         dismissButton = if (skill.canUninstall) {
             {
-                TextButton(
-                    onClick = onRemove,
-                    enabled = !isRemoving,
-                ) {
-                    Text(if (isRemoving) "卸载中…" else "卸载技能")
+                TextButton(onClick = onRemove, enabled = !isRemoving) {
+                    Text(if (isRemoving) "卸载中..." else "卸载技能")
                 }
             }
         } else {
@@ -666,13 +648,10 @@ private fun SkillDetailDialog(
                     onScopeChange = onScopeChange,
                 )
                 if ((lifecycle?.canUpdate == true || skill.canUpdate) && lifecycle?.updateAvailable == true) {
-                    Button(
-                        onClick = onUpdate,
-                        enabled = !isUpdating,
-                    ) {
+                    Button(onClick = onUpdate, enabled = !isUpdating) {
                         Text(
                             if (isUpdating) {
-                                "更新中…"
+                                "更新中..."
                             } else {
                                 "更新到 v${lifecycle.latestVersion ?: "latest"}"
                             },

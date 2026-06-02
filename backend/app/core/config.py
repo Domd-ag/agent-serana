@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # Marketplace
-    CLAWHUB_BASE_URL: str = "https://clawhub.ai"
+    SKILLHUB_BASE_URL: str = "https://api.skillhub.cn"
+    SKILLHUB_PUBLIC_BASE_URL: str = "https://skillhub.cn"
 
     def cors_allow_origins(self) -> list[str]:
         if self.CORS_ALLOW_ORIGINS.strip() == "*":
