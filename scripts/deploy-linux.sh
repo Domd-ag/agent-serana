@@ -158,8 +158,7 @@ Group=$SERVICE_USER
 WorkingDirectory=$APP_DIR/backend
 EnvironmentFile=$ENV_DIR/serana.env
 ExecStart=$APP_DIR/backend/venv/bin/python -m uvicorn app.main:app --host $HOST --port $PORT --no-use-colors
-Restart=always
-RestartSec=3
+Restart=no
 TimeoutStopSec=30
 
 [Install]
@@ -167,8 +166,8 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable "$SERVICE_NAME"
-  systemctl restart "$SERVICE_NAME"
+  systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
 }
 
 write_management_menu() {
@@ -297,6 +296,8 @@ print_summary() {
   printf 'Data dir:    %s\n' "$DATA_DIR"
   printf 'Health:      http://%s:%s/health\n' "${ip:-SERVER_IP}" "$PORT"
   printf 'API docs:    http://%s:%s/docs\n' "${ip:-SERVER_IP}" "$PORT"
+  printf 'Autostart:   disabled\n'
+  printf 'Run:         serana, then choose 1 to start\n'
   printf '\n'
   printf 'Useful commands:\n'
   printf '  serana\n'

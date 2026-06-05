@@ -48,14 +48,26 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 监听地址: 0.0.0.0:8000
 ```
 
-部署完成后检查：
+部署脚本只安装服务和菜单，不会开机自启，也不会在部署结束后自动启动后端。部署完成后用菜单手动启动：
+
+```bash
+serana
+```
+
+选择：
+
+```text
+1. 启动 Serana
+```
+
+然后检查：
 
 ```bash
 systemctl status serana-backend
 curl http://127.0.0.1:8000/health
 ```
 
-脚本也会创建一个运维菜单。以后 SSH 到服务器后可以直接输入：
+以后 SSH 到服务器后也可以直接输入：
 
 ```bash
 serana
@@ -75,6 +87,8 @@ serana
 ```
 
 菜单文件位于 `/root/serana-menu.sh`，命令入口位于 `/usr/local/bin/serana`。后续如果要增加数据库备份、清理缓存、查看配置等操作，可以继续在这个菜单里扩展。
+
+systemd 服务默认 `Restart=no`，并且不会 `enable` 开机自启。如果启动失败，服务会停在失败状态，不会一直重试刷日志。
 
 启动、关闭、重启、健康检查和重新部署后，菜单会自动显示当前服务状态和最近日志，方便确认操作是否成功。
 
