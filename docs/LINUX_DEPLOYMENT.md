@@ -1,6 +1,6 @@
 # Linux 一键部署方案
 
-本文档描述 Serana 后端在 Linux 服务器上的推荐部署方式：从 GitHub 拉取代码，创建 Python 虚拟环境，安装依赖，生成 systemd 服务，并由 Android App 在设置页配置服务器地址与 LLM 配置。
+本文档描述 Serana 后端在 Linux 服务器上的推荐部署方式：通过 HTTP 下载 GitHub 源码包，创建 Python 虚拟环境，安装依赖，生成 systemd 服务，并由 Android App 在设置页配置服务器地址与 LLM 配置。
 
 ## 目标形态
 
@@ -11,7 +11,7 @@ Android App
     v
 Serana Backend (systemd: serana-backend)
     |
-    +-- /opt/serana              GitHub 代码目录
+    +-- /opt/serana              后端代码目录
     +-- /etc/serana/serana.env   运行配置
     +-- /var/lib/serana          SQLite 数据和运行数据
 ```
@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 脚本默认参数：
 
 ```text
-GitHub 仓库: https://github.com/Domd-ag/agent-serana.git
+源码包: https://codeload.github.com/Domd-ag/agent-serana/tar.gz/refs/heads/main
 分支: main
 代码目录: /opt/serana
 配置文件: /etc/serana/serana.env
@@ -94,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 常用参数：
 
 ```text
-SERANA_REPO_URL       Git 仓库地址
+SERANA_ARCHIVE_URL    源码包下载地址
 SERANA_BRANCH         部署分支
 SERANA_APP_DIR        代码目录
 SERANA_DATA_DIR       数据目录
@@ -234,50 +234,42 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 
 脚本会：
 
-1. 拉取最新代码
-2. 更新 Python 依赖
-3. 保留 `/etc/serana/serana.env`
-4. 保留 `/var/lib/serana/serana.db`
-5. 重启 `serana-backend`
+1. 通过 HTTP 下载最新源码包
+2. 覆盖 `/opt/serana` 代码目录
+3. 更新 Python 依赖
+4. 保留 `/etc/serana/serana.env`
+5. 保留 `/var/lib/serana/serana.db`
+6. 重启 `serana-backend`
 
-也可以手动升级：
+如果服务器已经手动安装了 Python 3.11，可以继续指定 Python：
 
 ```bash
-cd /opt/serana
-git pull --ff-only
-cd backend
-./venv/bin/pip install -r requirements.txt
-systemctl restart serana-backend
+curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \
+  | SERANA_PYTHON_BIN=/opt/python-3.11/bin/python3.11 bash
 ```
 
 ## 回滚
 
-查看提交：
+脚本默认部署 `main` 分支源码包。如果要回滚到某个提交，可以在 GitHub 上找到提交 SHA，然后指定对应源码包地址：
 
 ```bash
-cd /opt/serana
-git log --oneline -20
+SERANA_ARCHIVE_URL=https://codeload.github.com/Domd-ag/agent-serana/tar.gz/<commit-sha> \
+SERANA_PYTHON_BIN=/opt/python-3.11/bin/python3.11 \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh)"
 ```
 
-回滚到指定提交：
+也可以回滚到某个分支：
 
 ```bash
-cd /opt/serana
-git checkout <commit>
-cd backend
-./venv/bin/pip install -r requirements.txt
-systemctl restart serana-backend
+curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \
+  | SERANA_BRANCH=main SERANA_PYTHON_BIN=/opt/python-3.11/bin/python3.11 bash
 ```
 
 ## 常见问题
 
 ### GitHub 下载卡住或 `Encountered end of file`
 
-这通常是服务器到 GitHub 的网络连接中断，不是 Serana 代码本身的问题。新版部署脚本已经会自动尝试：
-
-1. 正常 `git clone --depth 1`
-2. 使用 `HTTP/1.1` 重新 clone
-3. 从 GitHub codeload 下载源码压缩包并解压
+这通常是服务器到 GitHub 的网络连接中断，不是 Serana 代码本身的问题。部署脚本现在只依赖 HTTP 下载源码包，不要求服务器安装 Git。
 
 如果第一条一键命令没有任何输出，可以先改成分步执行，方便看到卡在哪一步：
 
