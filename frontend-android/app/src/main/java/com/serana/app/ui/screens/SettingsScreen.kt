@@ -74,24 +74,26 @@ fun SettingsScreen(
             )
         },
     ) { paddingValues ->
-        if (uiState.isLoading) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+                if (uiState.isLoading) {
+                    SettingsPanel {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CircularProgressIndicator()
+                            Text(
+                                text = "正在读取服务器配置…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 uiState.error?.let {
                     ErrorBanner(
                         message = it,
@@ -223,7 +225,6 @@ fun SettingsScreen(
                 }
                 }
             }
-        }
     }
 }
 

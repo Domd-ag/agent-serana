@@ -38,7 +38,7 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(SettingsUiState(isLoading = true))
+    private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     init {
@@ -46,10 +46,18 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun refresh() {
-        _uiState.value = _uiState.value.copy(isLoading = true, error = null, statusMessage = null)
+        val configuredServerUrl = RetrofitClient.configuredServerUrl
+        _uiState.value = _uiState.value.copy(
+            serverUrl = configuredServerUrl,
+            savedServerUrl = configuredServerUrl,
+            mode = if (configuredServerUrl.isBlank()) LlmMode.SERVER_CONNECTION else _uiState.value.mode,
+            isLoading = configuredServerUrl.isNotBlank(),
+            error = null,
+            statusMessage = null,
+        )
         viewModelScope.launch {
             try {
-                val serverUrl = RetrofitClient.configuredServerUrl
+                val serverUrl = configuredServerUrl
                 if (serverUrl.isBlank()) {
                     _uiState.value = _uiState.value.copy(
                         serverUrl = "",
@@ -88,6 +96,9 @@ class SettingsViewModel : ViewModel() {
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    serverUrl = configuredServerUrl,
+                    savedServerUrl = configuredServerUrl,
+                    mode = LlmMode.SERVER_CONNECTION,
                     error = e.message ?: "加载设置失败。",
                 )
             }
