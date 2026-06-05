@@ -189,6 +189,25 @@ pause() {
   read -r _
 }
 
+show_status() {
+  printf '\n---- 服务状态 ----\n'
+  systemctl status "\$SERVICE_NAME" --no-pager || true
+}
+
+show_recent_logs() {
+  printf '\n---- 最近日志 ----\n'
+  journalctl -u "\$SERVICE_NAME" -n 40 --no-pager || true
+}
+
+run_action() {
+  local title="\$1"
+  shift
+  printf '\n---- %s ----\n' "\$title"
+  "\$@" || true
+  show_status
+  show_recent_logs
+}
+
 show_menu() {
   clear 2>/dev/null || true
   cat <<MENU
@@ -212,35 +231,39 @@ while true; do
   read -r choice
   case "\$choice" in
     1)
-      systemctl start "\$SERVICE_NAME"
-      systemctl status "\$SERVICE_NAME" --no-pager
+      run_action "启动 Serana" systemctl start "\$SERVICE_NAME"
       pause
       ;;
     2)
-      systemctl stop "\$SERVICE_NAME"
-      systemctl status "\$SERVICE_NAME" --no-pager
+      run_action "关闭 Serana" systemctl stop "\$SERVICE_NAME"
       pause
       ;;
     3)
-      systemctl status "\$SERVICE_NAME" --no-pager
+      show_status
+      show_recent_logs
       pause
       ;;
     4)
       journalctl -u "\$SERVICE_NAME" -f
       ;;
     5)
-      systemctl restart "\$SERVICE_NAME"
-      systemctl status "\$SERVICE_NAME" --no-pager
+      run_action "重启 Serana" systemctl restart "\$SERVICE_NAME"
       pause
       ;;
     6)
+      printf '\n---- 健康检查 ----\n'
       curl -f "http://127.0.0.1:\$PORT/health" || true
       printf '\n'
+      show_status
+      show_recent_logs
       pause
       ;;
     7)
+      printf '\n---- 重新部署/更新 ----\n'
       curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \\
         | SERANA_PYTHON_BIN="\$PYTHON_BIN" bash
+      show_status
+      show_recent_logs
       pause
       ;;
     0)
