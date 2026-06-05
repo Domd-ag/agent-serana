@@ -203,18 +203,13 @@ show_status() {
   systemctl status "\$SERVICE_NAME" --no-pager || true
 }
 
-show_recent_logs() {
-  printf '\n---- 最近日志 ----\n'
-  journalctl -u "\$SERVICE_NAME" -n 40 --no-pager || true
-}
-
 run_action() {
   local title="\$1"
   shift
   printf '\n---- %s ----\n' "\$title"
   "\$@" || true
   show_status
-  show_recent_logs
+  printf '\n如需查看实时日志，请回到菜单选择 4。\n'
 }
 
 show_menu() {
@@ -249,7 +244,6 @@ while true; do
       ;;
     3)
       show_status
-      show_recent_logs
       pause
       ;;
     4)
@@ -263,8 +257,6 @@ while true; do
       printf '\n---- 健康检查 ----\n'
       curl -f "http://127.0.0.1:\$PORT/health" || true
       printf '\n'
-      show_status
-      show_recent_logs
       pause
       ;;
     7)
@@ -272,7 +264,7 @@ while true; do
       curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \\
         | SERANA_PYTHON_BIN="\$PYTHON_BIN" SERANA_VENV_DIR="\$VENV_DIR" bash
       show_status
-      show_recent_logs
+      printf '\n重新部署输出如上。如需查看实时日志，请回到菜单选择 4。\n'
       pause
       ;;
     0)
