@@ -148,9 +148,11 @@ object RetrofitClient {
                                 toolCalls = event.toolCalls.orEmpty(),
                             )
                         )
+                        return
                     }
                     "error" -> {
                         onEvent(ChatStreamEvent.Error(event.content?.toString().orEmpty()))
+                        return
                     }
                 }
             }

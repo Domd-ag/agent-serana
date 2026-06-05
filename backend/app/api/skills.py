@@ -152,13 +152,29 @@ async def install_marketplace_skill(
     if request.approval_request_id is not None:
         approval_request = await approval_manager.get_request(request.approval_request_id)
         if approval_request is None:
-            raise HTTPException(status_code=400, detail="Approval request not found or already expired")
+            logger.warning(
+                "Marketplace install approval request missing for %s: %s",
+                request.slug,
+                request.approval_request_id,
+            )
+            return MarketplaceInstallResponse(
+                status="approval_denied",
+                message="安装确认已过期或已关闭，请重新点击安装。",
+            )
         if (
             approval_request.tool_name != "skills.marketplace.install"
             or approval_request.entity_type != MARKETPLACE_ENTITY_TYPE
             or approval_request.entity_id != request.slug
         ):
-            raise HTTPException(status_code=400, detail="Approval request does not match this install operation")
+            logger.warning(
+                "Marketplace install approval mismatch for %s with request %s",
+                request.slug,
+                request.approval_request_id,
+            )
+            return MarketplaceInstallResponse(
+                status="approval_denied",
+                message="安装确认和当前技能不匹配，请重新点击安装。",
+            )
 
         approval_result = await approval_manager.consume_resolution(request.approval_request_id)
         if approval_result is None:
@@ -201,7 +217,8 @@ async def install_marketplace_skill(
             message="远程技能已安装。",
         )
     except SkillHubError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.warning("SkillHub marketplace install failed for %s: %s", request.slug, exc)
+        raise HTTPException(status_code=400, detail=f"安装远程技能 {request.slug} 失败：{exc}")
 
 
 @router.get("/{skill_name}", response_model=Optional[SkillPackage])

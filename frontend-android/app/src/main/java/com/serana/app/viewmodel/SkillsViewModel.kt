@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import retrofit2.Response
 
 class SkillsViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(LoadableState(data = emptyList<SkillPackage>(), isLoading = true))
@@ -341,7 +342,7 @@ class SkillsViewModel : ViewModel() {
                     )
                 }
                 if (!response.isSuccessful) {
-                    throw IllegalStateException("Failed to install marketplace skill")
+                    throw IllegalStateException(response.errorMessage("Failed to install marketplace skill"))
                 }
                 val payload = response.body() ?: throw IllegalStateException("Missing install response")
                 when (payload.status) {
@@ -398,7 +399,7 @@ class SkillsViewModel : ViewModel() {
                     )
                 }
                 if (!response.isSuccessful) {
-                    throw IllegalStateException("Failed to approve marketplace install")
+                    throw IllegalStateException(response.errorMessage("Failed to approve marketplace install"))
                 }
                 clearMarketplaceApproval()
                 installMarketplaceSkill(skill, approval.requestId)
@@ -924,4 +925,19 @@ class SkillsViewModel : ViewModel() {
             expiresAt = dto.expiresAt,
         )
     }
+}
+
+private fun Response<*>.errorMessage(fallback: String): String {
+    val body = errorBody()?.string().orEmpty().trim()
+    if (body.isBlank()) return fallback
+
+    val detail = Regex("\\\"detail\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"")
+        .find(body)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.replace("\\n", "\n")
+        ?.replace("\\\"", "\"")
+        ?.trim()
+
+    return detail?.takeIf { it.isNotBlank() } ?: body
 }

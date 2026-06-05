@@ -439,6 +439,44 @@ async def _persist_assistant_result(
     return assistant_message, audit_records
 
 
+async def _persist_streamed_assistant_result(
+    *,
+    chat_session_id: str,
+    assistant_content: str,
+    thinking_blocks: list[ThinkingBlock],
+    tool_calls: list[ToolCall],
+    user_input: str,
+    user_id: str,
+    memory_context_included: bool,
+    execution_mode: str,
+    delegation_plan: dict,
+    llm_config: dict | None = None,
+) -> None:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == chat_session_id))
+        chat_session = result.scalar_one_or_none()
+        if not chat_session:
+            logger.warning("Skipped streamed assistant persistence for missing session %s", chat_session_id)
+            return
+
+        try:
+            await _persist_assistant_result(
+                db,
+                chat_session=chat_session,
+                assistant_content=assistant_content,
+                thinking_blocks=thinking_blocks,
+                tool_calls=tool_calls,
+                user_input=user_input,
+                user_id=user_id,
+                memory_context_included=memory_context_included,
+                execution_mode=execution_mode,
+                delegation_plan=delegation_plan,
+                llm_config=llm_config,
+            )
+        except Exception:
+            logger.exception("Background streamed assistant persistence failed for session %s", chat_session_id)
+
+
 @router.post("/session", response_model=ChatSessionResponse)
 async def create_chat_session(
     session_create: Optional[ChatSessionCreate] = None,
@@ -734,20 +772,21 @@ async def send_chat_message(
                                 tool_call.model_dump() for tool_call in streamed_tool_calls
                             ],
                         }
-                        yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
-                        await _persist_assistant_result(
-                            db,
-                            chat_session=chat_session,
-                            assistant_content=accumulated_content,
-                            thinking_blocks=streamed_thinking_blocks,
-                            tool_calls=streamed_tool_calls,
-                            user_input=message_request.content,
-                            user_id=user.id,
-                            memory_context_included=prepared["memory_context_included"],
-                            execution_mode=str(event.get("execution_mode") or "direct"),
-                            delegation_plan=dict(event.get("delegation_plan") or {}),
-                            llm_config=llm_config,
+                        schedule_memory_task(
+                            _persist_streamed_assistant_result(
+                                chat_session_id=chat_session.id,
+                                assistant_content=accumulated_content,
+                                thinking_blocks=streamed_thinking_blocks,
+                                tool_calls=streamed_tool_calls,
+                                user_input=message_request.content,
+                                user_id=user.id,
+                                memory_context_included=prepared["memory_context_included"],
+                                execution_mode=str(event.get("execution_mode") or "direct"),
+                                delegation_plan=dict(event.get("delegation_plan") or {}),
+                                llm_config=llm_config,
+                            )
                         )
+                        yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
                         return
                     if event_type == "error":
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

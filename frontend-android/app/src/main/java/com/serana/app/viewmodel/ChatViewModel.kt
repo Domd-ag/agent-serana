@@ -23,6 +23,7 @@ import com.serana.app.data.models.ToolTrace
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -273,9 +274,14 @@ class ChatViewModel : ViewModel() {
             }
 
             completedSessionId?.let { sessionId ->
+                val expectedAssistantContent = _messages.value
+                    .firstOrNull { it.id == assistantMessageId }
+                    ?.content
+                    .orEmpty()
                 viewModelScope.launch {
                     try {
-                        hydrateAssistantFromDebug(sessionId, assistantMessageId)
+                        delay(500)
+                        hydrateAssistantFromDebug(sessionId, assistantMessageId, expectedAssistantContent)
                     } finally {
                         refreshSessions()
                     }
@@ -582,7 +588,11 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    private suspend fun hydrateAssistantFromDebug(sessionId: String, messageId: String) {
+    private suspend fun hydrateAssistantFromDebug(
+        sessionId: String,
+        messageId: String,
+        expectedContent: String,
+    ) {
         val debugResponse = withContext(Dispatchers.IO) {
             RetrofitClient.apiService.getChatDebug(sessionId)
         }
@@ -591,7 +601,7 @@ class ChatViewModel : ViewModel() {
             return
         }
         val latestAssistant = debug.messages.lastOrNull { it.role.equals("assistant", ignoreCase = true) }
-        if (latestAssistant != null) {
+        if (latestAssistant != null && latestAssistant.content == expectedContent) {
             replaceAssistantMessage(messageId, mapChatMessage(latestAssistant))
             updateStreamStatus(messageId, StreamStatus.FINALIZED)
         }
