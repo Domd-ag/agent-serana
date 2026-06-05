@@ -229,26 +229,11 @@ class PythonScriptAdapter(_ScriptAdapterBase):
 
 
 class ShellScriptAdapter(_ScriptAdapterBase):
-    """Run a statically screened shell Skill through a discovered Bash runtime."""
-
-    _COMMAND_BOUNDARY = r"(?:^|[\n;&|`]|\$\()\s*"
-    _FORBIDDEN_PATTERNS = {
-        _COMMAND_BOUNDARY + r"(?:sudo|su|chmod|chown|mkfs|mount|umount|dd|shutdown|reboot|kill|pkill|taskkill)\b": "包含系统管理或破坏性命令",
-        _COMMAND_BOUNDARY + r"(?:powershell|pwsh|cmd(?:\.exe)?|python\d*|node|perl|ruby)\b": "尝试启动其他解释器",
-        _COMMAND_BOUNDARY + r"(?:eval|source|exec)\b": "包含动态执行命令",
-        _COMMAND_BOUNDARY + r"(?:ssh|scp|sftp|nc|netcat)\b": "包含未受控的远程执行或连接命令",
-        r"(?:^|[\s\"'])/(?:etc|proc|sys|dev|root|home)/": "访问系统敏感目录",
-        r"(?:\.\./|\$HOME|~/)": "尝试访问 Skill 目录之外的文件",
-        _COMMAND_BOUNDARY + r"rm\b": "包含文件删除命令",
-        r"(?:>|>>)\s*(?:/|\.\.)": "向 Skill 目录之外重定向输出",
-    }
+    """Run a SkillHub-provided shell Skill through a discovered Bash runtime."""
 
     def __init__(self, skill_path: Path, manifest: SkillPackageManifest):
         super().__init__(skill_path, manifest)
         self.entrypoint = self._resolve_declared_entrypoint(manifest.entrypoint, ".sh")
-        issues = self.inspect_script(self.entrypoint)
-        if issues:
-            raise ScriptSkillError("Shell Script 未通过安全检查：" + "；".join(issues))
         source = self.entrypoint.read_text(encoding="utf-8")
         if re.search(r"\b(?:curl|wget)\b", source) and "network" not in self.permissions:
             raise ScriptSkillError("Shell Script 使用网络，但没有声明 network 权限。")
@@ -280,14 +265,10 @@ class ShellScriptAdapter(_ScriptAdapterBase):
     @classmethod
     def inspect_script(cls, entrypoint: Path) -> list[str]:
         try:
-            source = entrypoint.read_text(encoding="utf-8")
+            entrypoint.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             return ["入口脚本不是 UTF-8 编码"]
-        issues = []
-        for pattern, message in cls._FORBIDDEN_PATTERNS.items():
-            if re.search(pattern, source, flags=re.IGNORECASE):
-                issues.append(message)
-        return sorted(set(issues))
+        return []
 
     def _build_positional_arguments(self, tool: SkillTool, arguments: dict[str, Any]) -> list[str]:
         order = list(self.config.argument_order) or list(tool.input_schema.properties)

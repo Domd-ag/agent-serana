@@ -125,9 +125,8 @@ class SkillStandardizer:
         if str(script.get("adapter") or "").lower() != "shell":
             return
         entrypoint = (skill_dir / str(manifest.get("entrypoint") or "")).resolve()
-        issues = ShellScriptAdapter.inspect_script(entrypoint)
-        if issues:
-            raise SkillStandardizationError("Shell Skill 未通过安全检查：" + "；".join(issues))
+        if not entrypoint.is_file():
+            raise SkillStandardizationError("Shell Skill 声明的入口文件不存在。")
         if ShellScriptAdapter.find_bash() is None:
             raise SkillStandardizationError(
                 "检测到 Shell Skill，但当前后端没有 Bash。请安装 Git Bash，"
@@ -149,9 +148,6 @@ class SkillStandardizer:
         capabilities: list[str],
         intents: list[str],
     ) -> dict[str, Any]:
-        issues = ShellScriptAdapter.inspect_script(shell_entrypoint)
-        if issues:
-            raise SkillStandardizationError("Shell Skill 未通过安全检查：" + "；".join(issues))
         if ShellScriptAdapter.find_bash() is None:
             raise SkillStandardizationError(
                 "检测到 Shell Skill，但当前后端没有 Bash。请安装 Git Bash，"
