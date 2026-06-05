@@ -370,6 +370,9 @@ class SkillsViewModel : ViewModel() {
                     }
                 }
             } catch (e: Exception) {
+                if (approvalRequestId != null) {
+                    clearMarketplaceApproval()
+                }
                 _marketplaceError.value = e.message ?: "Failed to install marketplace skill"
             } finally {
                 _installingMarketplaceSlugs.value = _installingMarketplaceSlugs.value - skill.slug
@@ -397,8 +400,10 @@ class SkillsViewModel : ViewModel() {
                 if (!response.isSuccessful) {
                     throw IllegalStateException("Failed to approve marketplace install")
                 }
+                clearMarketplaceApproval()
                 installMarketplaceSkill(skill, approval.requestId)
             } catch (e: Exception) {
+                clearMarketplaceApproval()
                 _marketplaceError.value = e.message ?: "Failed to approve marketplace install"
             } finally {
                 _submittingMarketplaceApproval.value = false
@@ -412,6 +417,7 @@ class SkillsViewModel : ViewModel() {
 
         viewModelScope.launch {
             _submittingMarketplaceApproval.value = true
+            clearMarketplaceApproval()
             try {
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.apiService.submitApprovalDecision(
@@ -425,14 +431,17 @@ class SkillsViewModel : ViewModel() {
                 if (!response.isSuccessful) {
                     throw IllegalStateException("Failed to deny marketplace install")
                 }
-                _pendingMarketplaceSkill.value = null
-                _pendingMarketplaceApproval.value = null
             } catch (e: Exception) {
-                _marketplaceError.value = e.message ?: "Failed to deny marketplace install"
+                _marketplaceError.value = e.message ?: "Install approval was closed"
             } finally {
                 _submittingMarketplaceApproval.value = false
             }
         }
+    }
+
+    private fun clearMarketplaceApproval() {
+        _pendingMarketplaceSkill.value = null
+        _pendingMarketplaceApproval.value = null
     }
 
     fun uploadSkillArchive(

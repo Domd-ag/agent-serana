@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,15 @@ async def resolve_approval_decision(
     manager = get_approval_manager()
     approval_request = await manager.get_request(request_id)
     if approval_request is None:
+        if not approval_response.approved:
+            return ApprovalResponse(
+                request_id=request_id,
+                approved=False,
+                reviewer=approval_response.reviewer or "user",
+                note=approval_response.note or "审批请求已关闭或已失效。",
+                approval_scope=approval_response.approval_scope or "once",
+                resolved_at=approval_response.resolved_at or datetime.now(timezone.utc),
+            )
         raise HTTPException(status_code=404, detail="Approval request not found")
 
     resolved = await manager.resolve(
