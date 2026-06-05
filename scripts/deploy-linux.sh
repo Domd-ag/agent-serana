@@ -5,6 +5,7 @@ BRANCH="${SERANA_BRANCH:-main}"
 ARCHIVE_URL="${SERANA_ARCHIVE_URL:-https://codeload.github.com/Domd-ag/agent-serana/tar.gz/refs/heads/$BRANCH}"
 APP_DIR="${SERANA_APP_DIR:-/opt/serana}"
 DATA_DIR="${SERANA_DATA_DIR:-/var/lib/serana}"
+VENV_DIR="${SERANA_VENV_DIR:-$DATA_DIR/venv}"
 ENV_DIR="${SERANA_ENV_DIR:-/etc/serana}"
 SERVICE_USER="${SERANA_SERVICE_USER:-serana}"
 SERVICE_NAME="${SERANA_SERVICE_NAME:-serana-backend}"
@@ -132,13 +133,21 @@ EOF
 install_python_deps() {
   local backend_dir="$APP_DIR/backend"
   log "Creating Python virtual environment"
-  run_as_service_user "$PYTHON_BIN" -m venv "$backend_dir/venv"
-  run_as_service_user "$backend_dir/venv/bin/python" -m pip install --upgrade pip wheel setuptools
-  run_as_service_user "$backend_dir/venv/bin/pip" install -r "$backend_dir/requirements.txt"
+  mkdir -p "$(dirname "$VENV_DIR")"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$(dirname "$VENV_DIR")"
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    rm -rf "$VENV_DIR"
+    run_as_service_user "$PYTHON_BIN" -m venv "$VENV_DIR"
+  else
+    log "Keeping existing Python virtual environment: $VENV_DIR"
+  fi
+
+  run_as_service_user "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
+  run_as_service_user "$VENV_DIR/bin/pip" install -r "$backend_dir/requirements.txt"
 
   if [ "${SERANA_INSTALL_PLAYWRIGHT:-true}" = "true" ]; then
     log "Installing Playwright Chromium runtime"
-    "$backend_dir/venv/bin/python" -m playwright install --with-deps chromium
+    "$VENV_DIR/bin/python" -m playwright install --with-deps chromium
   fi
 }
 
@@ -157,7 +166,7 @@ User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$APP_DIR/backend
 EnvironmentFile=$ENV_DIR/serana.env
-ExecStart=$APP_DIR/backend/venv/bin/python -m uvicorn app.main:app --host $HOST --port $PORT --no-use-colors
+ExecStart=$VENV_DIR/bin/python -m uvicorn app.main:app --host $HOST --port $PORT --no-use-colors
 Restart=no
 TimeoutStopSec=30
 
@@ -182,6 +191,7 @@ SERVICE_NAME="$SERVICE_NAME"
 APP_DIR="$APP_DIR"
 PORT="$PORT"
 PYTHON_BIN="$PYTHON_BIN"
+VENV_DIR="$VENV_DIR"
 
 pause() {
   printf '\n按回车返回菜单...'
@@ -260,7 +270,7 @@ while true; do
     7)
       printf '\n---- 重新部署/更新 ----\n'
       curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \\
-        | SERANA_PYTHON_BIN="\$PYTHON_BIN" bash
+        | SERANA_PYTHON_BIN="\$PYTHON_BIN" SERANA_VENV_DIR="\$VENV_DIR" bash
       show_status
       show_recent_logs
       pause
@@ -294,6 +304,7 @@ print_summary() {
   printf 'App dir:     %s\n' "$APP_DIR"
   printf 'Env file:    %s/serana.env\n' "$ENV_DIR"
   printf 'Data dir:    %s\n' "$DATA_DIR"
+  printf 'Venv dir:    %s\n' "$VENV_DIR"
   printf 'Health:      http://%s:%s/health\n' "${ip:-SERVER_IP}" "$PORT"
   printf 'API docs:    http://%s:%s/docs\n' "${ip:-SERVER_IP}" "$PORT"
   printf 'Autostart:   disabled\n'

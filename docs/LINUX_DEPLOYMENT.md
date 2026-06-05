@@ -13,7 +13,7 @@ Serana Backend (systemd: serana-backend)
     |
     +-- /opt/serana              后端代码目录
     +-- /etc/serana/serana.env   运行配置
-    +-- /var/lib/serana          SQLite 数据和运行数据
+    +-- /var/lib/serana          SQLite 数据、运行数据和 Python 虚拟环境
 ```
 
 默认只部署后端。Android 客户端仍由 Android Studio 或 APK 安装；首次打开 App 后，在设置里先配置服务器地址，再配置 LLM 的 Base URL、API Key 和模型。
@@ -43,6 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 代码目录: /opt/serana
 配置文件: /etc/serana/serana.env
 数据目录: /var/lib/serana
+Python 虚拟环境: /var/lib/serana/venv
 服务用户: serana
 服务名: serana-backend
 监听地址: 0.0.0.0:8000
@@ -114,6 +115,7 @@ SERANA_ARCHIVE_URL    源码包下载地址
 SERANA_BRANCH         部署分支
 SERANA_APP_DIR        代码目录
 SERANA_DATA_DIR       数据目录
+SERANA_VENV_DIR       Python 虚拟环境目录
 SERANA_ENV_DIR        配置目录
 SERANA_SERVICE_USER   systemd 运行用户
 SERANA_SERVICE_NAME   systemd 服务名
@@ -252,7 +254,7 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 
 1. 通过 HTTP 下载最新源码包
 2. 覆盖 `/opt/serana` 代码目录
-3. 更新 Python 依赖
+3. 复用 `/var/lib/serana/venv` 虚拟环境并更新 Python 依赖
 4. 保留 `/etc/serana/serana.env`
 5. 保留 `/var/lib/serana/serana.db`
 6. 重启 `serana-backend`
@@ -327,7 +329,7 @@ curl http://SERVER_IP:8000/health
 确认 Playwright 已安装：
 
 ```bash
-/opt/serana/backend/venv/bin/python -m playwright install --with-deps chromium
+/var/lib/serana/venv/bin/python -m playwright install --with-deps chromium
 systemctl restart serana-backend
 ```
 
