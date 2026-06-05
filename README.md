@@ -75,6 +75,7 @@ LLM 不再由后端环境变量提供默认配置。首次使用时，先在 And
 - [后端说明](/D:/agent-serana/backend/README.md)
 - [Android 说明](/D:/agent-serana/frontend-android/README.md)
 - [后端演进路线图](/D:/agent-serana/docs/SEBASTIAN_BACKEND_ROADMAP.md)
+- [Linux 一键部署方案](/D:/agent-serana/docs/LINUX_DEPLOYMENT.md)
 - [后端 API 目录说明](/D:/agent-serana/backend/app/api/README.md)
 - [后端 Skill 目录说明](/D:/agent-serana/backend/app/skills/README.md)
 
