@@ -131,10 +131,10 @@ fun SettingsScreen(
                             onValueChange = viewModel::updateServerUrl,
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("服务器地址") },
-                            placeholder = { Text("例如 http://192.168.31.30:8000") },
+                            placeholder = { Text("例如 192.168.31.30 或 http://192.168.31.30:8000") },
                             isError = uiState.serverUrlError != null,
                             supportingText = {
-                                Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
+                                Text(uiState.serverUrlError ?: "可以直接填写服务器 IP；未填写端口时默认使用 8000，也可以填到 /api/v1。")
                             },
                         )
                         Button(

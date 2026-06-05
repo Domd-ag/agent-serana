@@ -173,14 +173,26 @@ object RetrofitClient {
         return "$root/api/v1/"
     }
 
-    private fun normalizeServerRootUrl(url: String): String {
+    fun normalizeServerRootUrl(url: String): String {
         val trimmed = url.trim().trimEnd('/')
-        return when {
-            trimmed.endsWith("/api/v1") -> trimmed.removeSuffix("/api/v1")
-            trimmed.endsWith("/api/v1/") -> trimmed.removeSuffix("/api/v1/")
+        val withScheme = when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            IPV4_WITH_OPTIONAL_PORT.matches(trimmed) -> {
+                val hasPort = trimmed.substringAfterLast('.').contains(':')
+                "http://$trimmed${if (hasPort) "" else ":8000"}"
+            }
             else -> trimmed
         }
+
+        return when {
+            withScheme.endsWith("/api/v1") -> withScheme.removeSuffix("/api/v1")
+            withScheme.endsWith("/api/v1/") -> withScheme.removeSuffix("/api/v1/")
+            else -> withScheme
+        }
     }
+
+    private val IPV4_WITH_OPTIONAL_PORT =
+        Regex("""^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(:\d{1,5})?$""")
 }
 
 sealed interface ChatStreamEvent {

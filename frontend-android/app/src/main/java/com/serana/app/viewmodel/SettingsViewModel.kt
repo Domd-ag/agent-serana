@@ -289,7 +289,8 @@ private fun validateModel(model: String): String? {
 
 private fun validateServerUrl(serverUrl: String): String? {
     if (serverUrl.isBlank()) return "请填写服务器地址。"
-    return if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
+    val normalized = RetrofitClient.normalizeServerRootUrl(serverUrl)
+    return if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
         null
     } else {
         "服务器地址必须以 http:// 或 https:// 开头。"

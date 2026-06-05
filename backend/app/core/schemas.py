@@ -202,6 +202,20 @@ class ChatMessageRequest(BaseModel):
     stream: bool = True
 
 
+class ChatSessionCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    title: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ToolResult(BaseModel):
     schema_version: str = "serana.tool_result.v1"
     result_type: str = "tool"
@@ -251,20 +265,6 @@ class ChatDebugResponse(BaseModel):
     messages: List[ChatMessageResponse] = Field(default_factory=list)
     audit_timeline: AuditTimelineResponse
     audit_summary: AuditInsightsResponse
-
-
-class ChatSessionCreate(BaseModel):
-    title: Optional[str] = None
-
-
-class ChatSessionResponse(BaseModel):
-    id: str
-    title: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 class AgentStatusResponse(BaseModel):
