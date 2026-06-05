@@ -133,7 +133,7 @@ class MemoryService:
         limit: int = 5,
     ) -> Dict[str, Any]:
         safe_limit = max(1, min(int(limit or 5), 8))
-        resident_entries = await self.resident.get_all_entries(limit=12)
+        resident_entries = await self.resident.get_all_entries(limit=24)
         resident_matches: List[Dict[str, Any]] = []
         for entry in resident_entries:
             score = self._score_match(query, entry.content)

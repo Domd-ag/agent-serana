@@ -63,10 +63,10 @@ The user can inspect audit records, timelines, and debug summaries when behavior
 
 ### Agents
 
-- support `Serana`, `Aide`, and `Forge`
-- allow pooled `Aide` and `Forge` instances
-- classify tasks and choose delegation patterns
-- support retries and batching in delegated work
+- support `Serana` and `Forge`
+- allow pooled `Forge` instances
+- let Serana classify tasks and choose delegation patterns
+- support retries and parallel Forge dispatch in delegated work
 
 ### Memory
 

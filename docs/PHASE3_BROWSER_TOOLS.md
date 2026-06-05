@@ -1,22 +1,30 @@
-# Phase 3: Browser Tools
+# 第三阶段：浏览器工具
 
-## Goal
+## 当前状态
 
-Support browser-assisted tasks through tool integrations that can inspect or operate on web content.
+浏览器轻量链路已经稳定化，可用于公开网页搜索、打开、观察、HTML 演示和下载 artifact 交付。
 
-## Current Status
+当前内置运行时不是完整 Chromium 自动化环境。页面点击、输入、截图和视觉观察保留统一工具契约，但在轻量运行时不可用时会明确返回失败，不会伪装执行成功。
 
-This area is still a lower-priority extension compared with the backend orchestration and audit work that is already implemented.
+## 执行链
 
-## Intended Direction
+1. Serana 选择 `browser.search_web`、`browser.open_page` 或其他浏览器工具。
+2. 每个工具结果通过 `serana.tool_result.v1` 回灌，并包含 `browser_state`。
+3. `open_page` 成功后自动执行一次 `observe_page`。
+4. LLM 根据观察结果决定直接回答、打开一个公共替代来源，或执行下一步。
+5. 单轮最多执行 6 个浏览器步骤、最多打开 2 个页面；重复动作会被停止。
+6. 任一步失败后停止继续观察，并生成不泄露内部 URL、路径和原始错误的用户回复。
 
-- browser navigation support
-- page inspection
-- action execution
-- screenshot and file handoff patterns
+## 安全边界
 
-## Design Constraints
+- 只访问公开 `http/https` 地址，拒绝本机、局域网和非全局 IP。
+- 每次响应最多读取 2 MiB；文本回灌最多 12000 字符。
+- 每次重定向都重新检查目标地址。
+- HTML Preview 必须自包含，禁止外部联网、iframe 和未绑定事件的交互控件。
+- 浏览器下载只能从受控目录按纯文件名交付。
 
-- keep browser actions visible in audit traces
-- align any browser tooling with the personal, self-hosted deployment model
-- avoid introducing complexity that weakens the current core backend flows
+## 后续增强
+
+- 接入完整浏览器运行时后，为 `act_page`、`capture_page` 和 `look_page` 提供真实实现。
+- 为搜索结果增加结构化链接提取与来源质量排序。
+- 为跨页面任务增加更细的恢复策略和页面状态快照。

@@ -57,7 +57,7 @@ async def list_skills(manager: SkillManager = Depends(get_skill_manager)):
 async def list_marketplace_skills(
     limit: int = 20,
     cursor: Optional[str] = None,
-    sort: str = "updated",
+    sort: str = "updated_at",
     manager: SkillManager = Depends(get_skill_manager),
     marketplace: SkillHubClient = Depends(get_marketplace_client),
 ):

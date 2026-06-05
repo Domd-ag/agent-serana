@@ -1,0 +1,72 @@
+{
+  "name": "memory_manager",
+  "version": "1.0.0",
+  "description": "Serana 内置记忆工具，用于显式保存、查询和管理当前会话工作记忆。",
+  "author": "Serana",
+  "format": "sebastian_package",
+  "runtime": "python",
+  "instruction_file": "SKILL.md",
+  "entrypoint": "__init__.py",
+  "agent_type": "all",
+  "max_instances": 1,
+  "capabilities": ["记忆", "偏好", "事实", "工作记忆"],
+  "intents": ["记住", "回忆", "之前说过", "临时记下", "清空临时记忆"],
+  "tools": [
+    {
+      "name": "memory_save",
+      "description": "显式保存一条长期用户事实或偏好。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {"type": "string"},
+          "value": {"type": "string"},
+          "category": {"type": "string"},
+          "confidence": {"type": "number"}
+        },
+        "required": ["key", "value"]
+      }
+    },
+    {
+      "name": "memory_search",
+      "description": "在长期记忆中查询用户明确询问的既有事实、偏好、摘要和经历。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "working_memory_save",
+      "description": "保存只属于当前会话或目标的临时工作状态。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {"type": "string"},
+          "value": {"type": "string"},
+          "scope": {"type": "string"},
+          "session_id": {"type": "string"},
+          "goal_id": {"type": "string"},
+          "priority": {"type": "number"}
+        },
+        "required": ["key", "value"]
+      }
+    },
+    {
+      "name": "working_memory_clear",
+      "description": "清空当前会话或目标的临时工作记忆。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "scope": {"type": "string"},
+          "session_id": {"type": "string"},
+          "goal_id": {"type": "string"}
+        },
+        "required": []
+      }
+    }
+  ],
+  "permissions": []
+}

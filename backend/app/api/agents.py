@@ -51,7 +51,7 @@ async def get_agent_statuses(
 @router.get("/manifests", response_model=List[Dict[str, Any]])
 async def get_agent_manifests():
     """获取所有代理的 manifest 信息"""
-    agent_types = ["serana", "aide", "forge"]
+    agent_types = ["serana", "forge"]
     manifests = []
     
     for agent_type in agent_types:

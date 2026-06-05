@@ -11,6 +11,7 @@ from app.core.models import ResidentMemory as DBResidentMemory
 logger = get_logger(__name__)
 
 SNAPSHOT_KEY = "__resident_snapshot__"
+DEFAULT_RESIDENT_LIMIT = 24
 
 
 class ResidentMemoryManager:
@@ -87,7 +88,7 @@ class ResidentMemoryManager:
 
     async def get_all_entries(
         self,
-        limit: int = 12,
+        limit: int = DEFAULT_RESIDENT_LIMIT,
         *,
         include_snapshot: bool = False,
     ) -> List[DBResidentMemory]:
@@ -99,7 +100,7 @@ class ResidentMemoryManager:
             stmt = stmt.where(DBResidentMemory.key != SNAPSHOT_KEY)
 
         result = await self.db.execute(
-            stmt.order_by(DBResidentMemory.priority.desc(), DBResidentMemory.updated_at.desc()).limit(limit)
+            stmt.order_by(DBResidentMemory.updated_at.desc(), DBResidentMemory.priority.desc()).limit(limit)
         )
         return list(result.scalars().all())
 
@@ -107,7 +108,7 @@ class ResidentMemoryManager:
         self,
         *,
         refresh_if_missing: bool = True,
-        limit: int = 12,
+        limit: int = DEFAULT_RESIDENT_LIMIT,
     ) -> str:
         snapshot = await self._get_entry_by_key(SNAPSHOT_KEY, include_snapshot=True)
         if snapshot and snapshot.is_active and snapshot.content.strip():
@@ -117,7 +118,7 @@ class ResidentMemoryManager:
             return ""
         return await self.refresh_snapshot(limit=limit)
 
-    async def refresh_snapshot(self, limit: int = 12) -> str:
+    async def refresh_snapshot(self, limit: int = DEFAULT_RESIDENT_LIMIT) -> str:
         entries = await self.get_all_entries(limit=limit, include_snapshot=False)
         if not entries:
             await self._deactivate_snapshot()
@@ -128,7 +129,7 @@ class ResidentMemoryManager:
         logger.info("Refreshed resident memory snapshot with %s entries", len(entries))
         return snapshot_content
 
-    async def to_context_string(self, limit: int = 12) -> str:
+    async def to_context_string(self, limit: int = DEFAULT_RESIDENT_LIMIT) -> str:
         snapshot_context = await self.get_snapshot_context(limit=limit)
         if snapshot_context:
             return snapshot_context

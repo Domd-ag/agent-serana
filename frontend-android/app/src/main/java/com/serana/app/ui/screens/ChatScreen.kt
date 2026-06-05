@@ -294,35 +294,10 @@ fun ChatScreen(
                         }
                         if (isLoading) {
                             item {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.52f),
-                                    shape = RoundedCornerShape(999.dp),
-                                    border = BorderStroke(
-                                        1.dp,
-                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
-                                    ),
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(11.dp),
-                                            strokeWidth = 1.6.dp,
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
-                                        )
-                                        Text(
-                                            text = if (pendingApproval != null) {
-                                                "Serana 正在等待你的确认…"
-                                            } else {
-                                                "Serana 正在整理回复…"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
+                                AssistantLoadingControl(
+                                    pendingApproval = pendingApproval != null,
+                                    onInterrupt = viewModel::interruptStreaming,
+                                )
                             }
                         }
 
@@ -439,6 +414,49 @@ private fun FloatingCircleButton(
                 modifier = Modifier.size(16.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun AssistantLoadingControl(
+    pendingApproval: Boolean,
+    onInterrupt: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(start = 16.dp),
+        horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.52f),
+            shape = RoundedCornerShape(999.dp),
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
+            ),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    strokeWidth = 1.6.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
+                )
+                Text(
+                    text = if (pendingApproval) {
+                        "Serana 正在等待你的确认…"
+                    } else {
+                        "Serana 正在整理回复…"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        InterruptStreamingButton(onInterrupt = onInterrupt)
     }
 }
 
@@ -756,15 +774,74 @@ private fun SkillsOverlayDialog(
     val marketplaceLoading by viewModel.marketplaceLoading.collectAsState()
     val marketplaceError by viewModel.marketplaceError.collectAsState()
     val updatingSkillNames by viewModel.updatingSkillNames.collectAsState()
+    val removingSkillNames by viewModel.removingSkillNames.collectAsState()
     val installingMarketplaceSlugs by viewModel.installingMarketplaceSlugs.collectAsState()
+    val pendingMarketplaceApproval by viewModel.pendingMarketplaceApproval.collectAsState()
+    val submittingMarketplaceApproval by viewModel.submittingMarketplaceApproval.collectAsState()
+    val pendingLocalApproval by viewModel.pendingLocalApproval.collectAsState()
+    val submittingLocalApproval by viewModel.submittingLocalApproval.collectAsState()
     var marketplaceQuery by remember { mutableStateOf("") }
+    var marketplaceMode by rememberSaveable { mutableStateOf("recommend") }
     var showMarketplace by rememberSaveable { mutableStateOf(true) }
+    var pendingRemoveSkillName by rememberSaveable { mutableStateOf<String?>(null) }
 
     val filteredSkills = uiState.data
 
+    pendingMarketplaceApproval?.let { approval ->
+        ApprovalDialog(
+            request = approval,
+            isSubmitting = submittingMarketplaceApproval,
+            onApproveOnce = viewModel::approveMarketplaceInstall,
+            onApproveAlways = viewModel::approveMarketplaceInstall,
+            onDeny = viewModel::denyMarketplaceInstall,
+        )
+    }
+
+    pendingLocalApproval?.let { approval ->
+        ApprovalDialog(
+            request = approval,
+            isSubmitting = submittingLocalApproval,
+            onApproveOnce = viewModel::approveSkillRemoval,
+            onApproveAlways = viewModel::approveSkillRemoval,
+            onDeny = viewModel::denySkillRemoval,
+        )
+    }
+
+    pendingRemoveSkillName?.let { skillName ->
+        val skill = filteredSkills.firstOrNull { it.name == skillName }
+        if (skill != null) {
+            AlertDialog(
+                onDismissRequest = { pendingRemoveSkillName = null },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingRemoveSkillName = null
+                            viewModel.removeSkill(skill)
+                        },
+                    ) {
+                        Text("卸载")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRemoveSkillName = null }) {
+                        Text("取消")
+                    }
+                },
+                title = { Text("卸载技能") },
+                text = { Text("确定要卸载 ${skill.name} 吗？卸载后需要重新安装才能再次使用。") },
+            )
+        } else {
+            pendingRemoveSkillName = null
+        }
+    }
+
     OverlayDialogScaffold(
-        title = "技能",
-        subtitle = "从 SkillHub 安装新技能，或管理已安装技能。",
+        title = if (showMarketplace) "远程技能" else "本地技能",
+        subtitle = if (showMarketplace) {
+            "从 SkillHub 浏览并安装新的技能。"
+        } else {
+            "查看当前设备上已经安装的技能。"
+        },
         onDismiss = onDismiss,
     ) {
         SkillSourceSelector(
@@ -778,9 +855,9 @@ private fun SkillsOverlayDialog(
             enter = fadeIn() + expandVertically(),
             exit = fadeOut(),
         ) {
-            OverlaySection(
-                title = "本地技能",
-                subtitle = "这些技能已经安装在当前设备上。",
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (uiState.isLoading) {
                     CircularProgressIndicator()
@@ -792,54 +869,13 @@ private fun SkillsOverlayDialog(
                     )
                 } else {
                     filteredSkills.take(6).forEach { skill ->
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
-                            border = BorderStroke(
-                                1.dp,
-                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.24f),
-                            ),
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(skill.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                                        SkillMetaText(if (skill.isEnabled) "已启用" else "已停用")
-                                    }
-                                    AssistChip(
-                                    onClick = { viewModel.toggleSkill(skill) },
-                                    enabled = !updatingSkillNames.contains(skill.name),
-                                    label = {
-                                        Text(
-                                            if (skill.isEnabled) {
-                                                "停用"
-                                            } else {
-                                                "启用"
-                                            },
-                                        )
-                                        },
-                                    )
-                                }
-                                skill.description?.takeIf { it.isNotBlank() }?.let {
-                                    Text(
-                                        it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                skill.author?.takeIf { it.isNotBlank() }?.let {
-                                    SkillMetaText(it)
-                                }
-                            }
-                        }
+                        LocalSkillRow(
+                            skill = skill,
+                            isUpdating = updatingSkillNames.contains(skill.name),
+                            isRemoving = removingSkillNames.contains(skill.name),
+                            onRemove = { pendingRemoveSkillName = skill.name },
+                            onToggle = { viewModel.toggleSkill(skill) },
+                        )
                     }
                 }
             }
@@ -850,28 +886,55 @@ private fun SkillsOverlayDialog(
             enter = fadeIn() + expandVertically(),
             exit = fadeOut(),
         ) {
-            OverlaySection(
-                title = "远程技能",
-                subtitle = "从 SkillHub 浏览并安装新的技能。",
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                OutlinedTextField(
-                    value = marketplaceQuery,
-                    onValueChange = { marketplaceQuery = it },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("搜索远程技能") },
-                    singleLine = true,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { viewModel.searchMarketplace(marketplaceQuery) }) {
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = marketplaceQuery,
+                        onValueChange = { marketplaceQuery = it },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("搜索 skill 名称、描述") },
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = {
+                            marketplaceMode = "search"
+                            viewModel.searchMarketplace(marketplaceQuery)
+                        },
+                    ) {
                         Text("搜索")
                     }
-                    TextButton(onClick = {
-                        marketplaceQuery = ""
-                        viewModel.loadMarketplace()
-                    }) {
-                        Text("热门")
-                    }
                 }
+                SkillHubExploreTabs(
+                    selected = marketplaceMode,
+                    onSelect = { mode ->
+                        marketplaceMode = mode
+                        when (mode) {
+                            "recommend" -> {
+                                marketplaceQuery = ""
+                                viewModel.loadMarketplace(sort = "score", shuffleForRecommendations = true)
+                            }
+                            "trending" -> {
+                                marketplaceQuery = ""
+                                viewModel.loadMarketplace(sort = "score")
+                            }
+                            "popular" -> {
+                                marketplaceQuery = ""
+                                viewModel.loadMarketplace(sort = "downloads")
+                            }
+                            "latest" -> {
+                                marketplaceQuery = ""
+                                viewModel.loadMarketplace(sort = "updated_at")
+                            }
+                        }
+                    },
+                )
                 marketplaceError?.let {
                     Text(
                         it,
@@ -881,49 +944,19 @@ private fun SkillsOverlayDialog(
                 }
                 if (marketplaceLoading) {
                     CircularProgressIndicator()
+                } else if (marketplaceSkills.isEmpty()) {
+                    Text(
+                        "暂无数据。可以换一个关键词，或回到“为你推荐”。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 } else {
-                    marketplaceSkills.take(4).forEach { skill ->
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
-                            border = BorderStroke(
-                                1.dp,
-                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.24f),
-                            ),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(skill.displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                                    skill.summary?.takeIf { it.isNotBlank() }?.let {
-                                        Text(
-                                            it,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                                AssistChip(
-                                    onClick = { viewModel.installMarketplaceSkill(skill) },
-                                    enabled = !skill.installed && !installingMarketplaceSlugs.contains(skill.slug),
-                                    label = {
-                                        Text(
-                                            when {
-                                                installingMarketplaceSlugs.contains(skill.slug) -> "安装中…"
-                                                skill.installed -> "已安装"
-                                                else -> "安装"
-                                            },
-                                        )
-                                    },
-                                )
-                            }
-                        }
+                    marketplaceSkills.take(6).forEach { skill ->
+                        MarketplaceSkillRow(
+                            skill = skill,
+                            isInstalling = installingMarketplaceSlugs.contains(skill.slug),
+                            onInstall = { viewModel.installMarketplaceSkill(skill) },
+                        )
                     }
                 }
             }
@@ -1079,15 +1112,18 @@ private fun OverlayDialogScaffold(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (subtitle.isNotBlank()) {
+                                Text(
+                                    subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         AssistChip(
                             onClick = onDismiss,
-                            label = { Text("关闭") },
+                            modifier = Modifier.height(34.dp),
+                            label = { Text("关闭", style = MaterialTheme.typography.labelSmall) },
                         )
                     }
                 }
@@ -1282,87 +1318,483 @@ private fun SkillMetaText(text: String) {
 }
 
 @Composable
+private fun SkillInstallActionButton(
+    installed: Boolean,
+    isInstalling: Boolean,
+    onInstall: () -> Unit,
+) {
+    when {
+        isInstalling -> {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(10.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = "安装中",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+
+        installed -> {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ) {
+                Text(
+                    text = "已安装",
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        else -> {
+            Surface(
+                onClick = onInstall,
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            ) {
+                Text(
+                    text = "安装",
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkillToggleActionButton(
+    enabled: Boolean,
+    isUpdating: Boolean,
+    onToggle: () -> Unit,
+) {
+    when {
+        isUpdating -> {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(10.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = if (enabled) "停用中" else "启用中",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+
+        enabled -> {
+            Surface(
+                onClick = onToggle,
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ) {
+                Text(
+                    text = "停用",
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        else -> {
+            Surface(
+                onClick = onToggle,
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            ) {
+                Text(
+                    text = "启用",
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkillUninstallActionButton(
+    isRemoving: Boolean,
+    enabled: Boolean,
+    onRemove: () -> Unit,
+) {
+    val containerColor = if (isRemoving) {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    } else {
+        MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+    }
+    val contentColor = if (isRemoving) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.error
+    }
+
+    Surface(
+        onClick = onRemove,
+        enabled = enabled,
+        shape = RoundedCornerShape(999.dp),
+        color = containerColor,
+    ) {
+        Text(
+            text = if (isRemoving) "卸载中…" else "卸载",
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+        )
+    }
+}
+
+@Composable
+private fun SkillHubExploreTabs(
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        listOf(
+            "recommend" to "为你推荐",
+            "trending" to "近期飙升",
+            "popular" to "下载热榜",
+            "latest" to "最近上新",
+        ).forEach { (value, label) ->
+            AssistChip(
+                onClick = { onSelect(value) },
+                enabled = value == "recommend" || selected != value,
+                label = { Text(label) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarketplaceSkillRow(
+    skill: MarketplaceSkill,
+    isInstalling: Boolean,
+    onInstall: () -> Unit,
+) {
+    val summaryScrollState = rememberScrollState()
+    val displayName = skill.displayName ?: skill.slug
+    val versionLabel = skill.version?.takeIf { it.isNotBlank() }?.let { "v$it" }
+    val meta = listOfNotNull(
+        skill.ownerHandle?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)),
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(186.dp)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 32.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        Text(
+                            text = displayName,
+                            modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        versionLabel?.let {
+                            Box(modifier = Modifier.padding(bottom = 2.dp)) {
+                                SkillMetaText(it)
+                            }
+                        }
+                    }
+                    if (meta.isNotBlank()) {
+                        SkillMetaText(meta)
+                    }
+                }
+            }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f),
+            ) {}
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
+                    border = BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f),
+                    ),
+                ) {
+                    Text(
+                        text = skill.summary?.takeIf { it.isNotBlank() } ?: "暂无描述。",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(summaryScrollState)
+                            .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 52.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 20.sp,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 10.dp, bottom = 6.dp),
+                ) {
+                    SkillInstallActionButton(
+                        installed = skill.installed,
+                        isInstalling = isInstalling,
+                        onInstall = onInstall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalSkillRow(
+    skill: SkillPackage,
+    isUpdating: Boolean,
+    isRemoving: Boolean,
+    onRemove: () -> Unit,
+    onToggle: () -> Unit,
+) {
+    val summaryScrollState = rememberScrollState()
+    val versionLabel = skill.version.takeIf { it.isNotBlank() }?.let { "v$it" }
+    val authorLabel = skill.author?.takeIf { it.isNotBlank() }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)),
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(216.dp)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 34.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        Text(
+                            text = skill.name,
+                            modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        versionLabel?.let {
+                            Box(modifier = Modifier.padding(bottom = 2.dp)) {
+                                SkillMetaText(it)
+                            }
+                        }
+                    }
+                    authorLabel?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f),
+            ) {}
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
+                    border = BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f),
+                    ),
+                ) {
+                    Text(
+                        text = (skill.description ?: "").takeIf { it.isNotBlank() } ?: "暂无描述。",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(summaryScrollState)
+                            .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 56.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 20.sp,
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 10.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SkillToggleActionButton(
+                        enabled = skill.isEnabled,
+                        isUpdating = isUpdating || isRemoving,
+                        onToggle = onToggle,
+                    )
+                    if (skill.canUninstall) {
+                        SkillUninstallActionButton(
+                            isRemoving = isRemoving,
+                            enabled = !isUpdating && !isRemoving,
+                            onRemove = onRemove,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SkillSourceSelector(
     showMarketplace: Boolean,
     onSelectLocal: () -> Unit,
     onSelectMarketplace: () -> Unit,
 ) {
-    val description = if (showMarketplace) {
-        "从 SkillHub 浏览并安装新的技能。"
-    } else {
-        "查看当前设备上已经安装的技能。"
-    }
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp),
     ) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp),
+        val segmentWidth = maxWidth / 2
+        val indicatorOffset by animateDpAsState(
+            targetValue = if (showMarketplace) 0.dp else segmentWidth,
+            label = "skill_source_selector_offset",
+        )
+
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f)),
         ) {
-            val segmentWidth = maxWidth / 2
-            val indicatorOffset by animateDpAsState(
-                targetValue = if (showMarketplace) 0.dp else segmentWidth,
-                label = "skill_source_selector_offset",
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .padding(3.dp)
+                        .width(segmentWidth - 3.dp)
+                        .fillMaxHeight()
+                        .offset(x = indicatorOffset),
+                    shape = RoundedCornerShape(11.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                ) {}
 
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f)),
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Surface(
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Box(
                         modifier = Modifier
-                            .padding(3.dp)
-                            .width(segmentWidth - 3.dp)
+                            .weight(1f)
                             .fillMaxHeight()
-                            .offset(x = indicatorOffset),
-                        shape = RoundedCornerShape(11.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
-                    ) {}
-
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable { onSelectMarketplace() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "远程",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (showMarketplace) Color.White else MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.Medium,
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable { onSelectLocal() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "本地",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (showMarketplace) MaterialTheme.colorScheme.onSurface else Color.White,
-                                fontWeight = FontWeight.Medium,
-                            )
-                        }
+                            .clickable { onSelectMarketplace() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "远程",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (showMarketplace) Color.White else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable { onSelectLocal() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "本地",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (showMarketplace) MaterialTheme.colorScheme.onSurface else Color.White,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
                 }
             }
         }
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -1504,6 +1936,11 @@ private fun MessageBubble(
             StatusPill("请求失败", MaterialTheme.colorScheme.error)
         }
 
+        if (!isUser && message.streamStatus == StreamStatus.INTERRUPTED) {
+            Spacer(modifier = Modifier.height(6.dp))
+            StatusPill("已打断", MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
         if (
             !isUser &&
             (message.streamStatus == StreamStatus.FAILED || message.streamStatus == StreamStatus.RETRYING) &&
@@ -1516,6 +1953,26 @@ private fun MessageBubble(
                 Text(if (message.streamStatus == StreamStatus.RETRYING) "重试中…" else "重试")
             }
         }
+    }
+}
+
+@Composable
+private fun InterruptStreamingButton(
+    onInterrupt: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.padding(top = 2.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.18f)),
+        onClick = onInterrupt,
+    ) {
+        Text(
+            text = "打断",
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
 }
 
@@ -1842,10 +2299,18 @@ private fun shouldShowExecutionTool(trace: ToolTrace): Boolean {
         "contextual_followup_assessment",
         "conversation_route",
         "serana_loop_stage",
+        "serana_loop_transition",
+        "serana_analyze",
+        "serana_planning_stage",
+        "serana_summarize",
         "serana_contextual_reply",
         "serana_direct_reply",
+        "serana_route_review",
         "serana_tool_selection",
         "serana_policy_gate",
+        "skill",
+        "skills",
+        "llm_gateway",
     )
     val hiddenPrefixes = listOf(
         "memory_injector",

@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import asyncio
+import json
 import uuid
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import AgentManifest, AgentState, load_manifest
 from app.core.logger import get_logger
@@ -156,13 +158,65 @@ class ForgeAgent:
                 "processed_items": processed_items,
             }
 
-        self._append_thinking("Execution", "Task execution completed.")
+        task_context = {
+            "original_user_request": str(task.get("original_user_request") or description),
+            "description": description,
+            "task_type": _infer_task_type(task),
+            "batch_items": batch_items,
+            "strategy": strategy,
+        }
+        try:
+            response = await self.llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "Complete the delegated subtask and return a substantive result for Serana to use in the "
+                            "final answer. The original user request is the answer contract: preserve its subject, "
+                            "constraints, requested deliverable, and language while completing this subtask. Do not "
+                            "answer a neighboring or generic task. Answer in the user's language when it is clear from "
+                            "the task. Do not report "
+                            "internal execution status, agent names, strategy names, or tool names. If the subtask "
+                            "requires current external information or actions that you cannot verify, state the exact "
+                            "missing evidence instead of inventing a result."
+                        )
+                    ),
+                    HumanMessage(content=json.dumps(task_context, ensure_ascii=False)),
+                ]
+            )
+            content = str(response.content).strip()
+        except Exception as exc:
+            request_logger.exception("Forge failed to produce substantive output for task: %s", description)
+            self._append_thinking("Execution", "Task execution failed before producing a usable result.")
+            return {
+                "status": "failed",
+                "task_type": _infer_task_type(task),
+                "strategy": strategy,
+                "tool_name": tool_name,
+                "message": f"Failed to produce a usable result: {exc}",
+                "attempt": attempt,
+                "processed_items": processed_items,
+            }
+
+        if not content:
+            self._append_thinking("Execution", "Task execution produced no usable result.")
+            return {
+                "status": "failed",
+                "task_type": _infer_task_type(task),
+                "strategy": strategy,
+                "tool_name": tool_name,
+                "message": "The delegated task produced no usable result.",
+                "attempt": attempt,
+                "processed_items": processed_items,
+            }
+
+        self._append_thinking("Execution", "Task execution completed with a substantive result.")
         return {
             "status": "completed",
             "task_type": _infer_task_type(task),
             "strategy": strategy,
             "tool_name": tool_name,
             "message": f"{action} Task '{description}' completed.",
+            "content": content,
             "attempt": attempt,
             "processed_items": processed_items,
         }

@@ -77,6 +77,7 @@ class SkillsViewModel : ViewModel() {
     private val _pendingLocalSkill = MutableStateFlow<SkillPackage?>(null)
     private val _submittingLocalApproval = MutableStateFlow(false)
     val submittingLocalApproval: StateFlow<Boolean> = _submittingLocalApproval.asStateFlow()
+    private var lastRecommendationTopSlugs: List<String> = emptyList()
 
     private val _uploadingLocalSkill = MutableStateFlow(false)
     val uploadingLocalSkill: StateFlow<Boolean> = _uploadingLocalSkill.asStateFlow()
@@ -97,7 +98,7 @@ class SkillsViewModel : ViewModel() {
 
     init {
         refresh()
-        loadMarketplace()
+        loadMarketplace(sort = "score", shuffleForRecommendations = true)
     }
 
     fun refresh() {
@@ -116,6 +117,7 @@ class SkillsViewModel : ViewModel() {
                 }
                 val skills = response.body().orEmpty().map(::mapSkillPackage)
                 _uiState.value = LoadableState(data = skills)
+                syncMarketplaceInstalledState(skills)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -249,18 +251,28 @@ class SkillsViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(error = message)
     }
 
-    fun loadMarketplace() {
+    fun loadMarketplace(
+        sort: String = "updated_at",
+        shuffleForRecommendations: Boolean = false,
+    ) {
         _marketplaceLoading.value = true
         _marketplaceError.value = null
         viewModelScope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
-                    RetrofitClient.apiService.getMarketplaceSkills()
+                    RetrofitClient.apiService.getMarketplaceSkills(sort = sort)
                 }
                 if (!response.isSuccessful) {
                     throw IllegalStateException("Failed to load marketplace")
                 }
-                _marketplaceSkills.value = response.body().orEmptyItems().map(::mapMarketplaceSkill)
+                val mappedSkills = markMarketplaceInstalled(
+                    response.body().orEmptyItems().map(::mapMarketplaceSkill),
+                )
+                _marketplaceSkills.value = if (shuffleForRecommendations) {
+                    remixedRecommendations(mappedSkills)
+                } else {
+                    mappedSkills
+                }
             } catch (e: Exception) {
                 _marketplaceError.value = e.message ?: "Failed to load marketplace"
             } finally {
@@ -285,7 +297,9 @@ class SkillsViewModel : ViewModel() {
                 if (!response.isSuccessful) {
                     throw IllegalStateException("Failed to search marketplace")
                 }
-                _marketplaceSkills.value = response.body()?.results.orEmpty().map(::mapMarketplaceSkill)
+                _marketplaceSkills.value = markMarketplaceInstalled(
+                    response.body()?.results.orEmpty().map(::mapMarketplaceSkill),
+                )
             } catch (e: Exception) {
                 _marketplaceError.value = e.message ?: "Failed to search marketplace"
             } finally {
@@ -294,10 +308,29 @@ class SkillsViewModel : ViewModel() {
         }
     }
 
+    private fun remixedRecommendations(skills: List<MarketplaceSkill>): List<MarketplaceSkill> {
+        if (skills.size <= 1) {
+            lastRecommendationTopSlugs = skills.take(6).map { it.slug }
+            return skills
+        }
+
+        val shuffled = skills.shuffled()
+        val topSignature = shuffled.take(6).map { it.slug }
+        if (topSignature != lastRecommendationTopSlugs) {
+            lastRecommendationTopSlugs = topSignature
+            return shuffled
+        }
+
+        val remixed = shuffled.drop(1) + shuffled.take(1)
+        lastRecommendationTopSlugs = remixed.take(6).map { it.slug }
+        return remixed
+    }
+
     fun installMarketplaceSkill(skill: MarketplaceSkill, approvalRequestId: String? = null) {
+        if (skill.installed || _installingMarketplaceSlugs.value.contains(skill.slug)) return
+        _installingMarketplaceSlugs.value = _installingMarketplaceSlugs.value + skill.slug
         viewModelScope.launch {
             try {
-                _installingMarketplaceSlugs.value = _installingMarketplaceSlugs.value + skill.slug
                 _marketplaceError.value = null
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.apiService.installMarketplaceSkill(
@@ -315,10 +348,12 @@ class SkillsViewModel : ViewModel() {
                     "approval_required" -> {
                         _pendingMarketplaceSkill.value = skill
                         _pendingMarketplaceApproval.value = payload.approvalRequest?.let(::mapApprovalRequest)
+                        _installingMarketplaceSlugs.value = _installingMarketplaceSlugs.value - skill.slug
                     }
                     "installed" -> {
                         _pendingMarketplaceSkill.value = null
                         _pendingMarketplaceApproval.value = null
+                        markMarketplaceSkillInstalled(skill)
                         refresh()
                         searchMarketplace(skill.slug)
                     }
@@ -345,7 +380,7 @@ class SkillsViewModel : ViewModel() {
     fun approveMarketplaceInstall() {
         val approval = _pendingMarketplaceApproval.value ?: return
         val skill = _pendingMarketplaceSkill.value ?: return
-        if (_submittingMarketplaceApproval.value) return
+        if (_submittingMarketplaceApproval.value || _installingMarketplaceSlugs.value.contains(skill.slug)) return
 
         viewModelScope.launch {
             _submittingMarketplaceApproval.value = true
@@ -764,7 +799,7 @@ class SkillsViewModel : ViewModel() {
     private fun mapMarketplaceSkill(dto: com.serana.app.data.api.MarketplaceSkillDto): MarketplaceSkill {
         return MarketplaceSkill(
             slug = dto.slug,
-            displayName = dto.displayName,
+            displayName = dto.displayName?.takeIf { it.isNotBlank() } ?: dto.slug,
             summary = dto.summary,
             version = dto.version,
             ownerHandle = dto.ownerHandle,
@@ -772,6 +807,65 @@ class SkillsViewModel : ViewModel() {
             installed = dto.installed,
             localSkillName = dto.localSkillName,
         )
+    }
+
+    private fun syncMarketplaceInstalledState(localSkills: List<SkillPackage> = _uiState.value.data) {
+        _marketplaceSkills.value = markMarketplaceInstalled(_marketplaceSkills.value, localSkills)
+    }
+
+    private fun markMarketplaceInstalled(
+        skills: List<MarketplaceSkill>,
+        localSkills: List<SkillPackage> = _uiState.value.data,
+    ): List<MarketplaceSkill> {
+        if (skills.isEmpty()) return skills
+        val localKeys = localSkills.flatMap { local ->
+            listOfNotNull(
+                local.name,
+                local.registrySlug,
+                local.sourceUrl?.substringAfterLast("/")?.takeIf { it.isNotBlank() },
+            )
+        }.map { normalizeSkillKey(it) }.toSet()
+
+        return skills.map { skill ->
+            val candidates = listOfNotNull(
+                skill.slug,
+                skill.displayName,
+                skill.localSkillName,
+                skill.canonicalUrl?.substringAfterLast("/")?.takeIf { it.isNotBlank() },
+            ).map { normalizeSkillKey(it) }
+            if (skill.installed || candidates.any { it in localKeys }) {
+                skill.copy(installed = true)
+            } else {
+                skill
+            }
+        }
+    }
+
+    private fun markMarketplaceSkillInstalled(skill: MarketplaceSkill) {
+        _marketplaceSkills.value = _marketplaceSkills.value.map { item ->
+            if (isSameMarketplaceSkill(item, skill)) {
+                item.copy(installed = true)
+            } else {
+                item
+            }
+        }
+    }
+
+    private fun isSameMarketplaceSkill(left: MarketplaceSkill, right: MarketplaceSkill): Boolean {
+        val rightKeys = listOfNotNull(right.slug, right.displayName, right.localSkillName)
+            .map { normalizeSkillKey(it) }
+            .toSet()
+        return listOfNotNull(left.slug, left.displayName, left.localSkillName)
+            .map { normalizeSkillKey(it) }
+            .any { it in rightKeys }
+    }
+
+    private fun normalizeSkillKey(value: String): String {
+        return value
+            .trim()
+            .lowercase()
+            .replace("_", "-")
+            .replace(" ", "-")
     }
 
     private fun mapSkillPackage(dto: com.serana.app.data.api.SkillPackageDto): SkillPackage {

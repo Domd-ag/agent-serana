@@ -119,6 +119,41 @@ class MemoryArtifactManager:
                 confidence=confidence,
             )
 
+        if kind in {"fact", "preference"} and candidate.key.strip():
+            existing_profile_artifact = await self.find_active_profile_artifact(
+                kind=kind,
+                key=candidate.key.strip(),
+            )
+            if existing_profile_artifact:
+                if self._normalize(existing_profile_artifact.content) == self._normalize(content):
+                    return MemoryArtifactDecision(
+                        action="skip",
+                        kind=kind,
+                        content=content,
+                        reason="duplicate_profile_artifact",
+                        artifact_id=str(existing_profile_artifact.id),
+                        confidence=confidence,
+                    )
+                existing_profile_artifact.content = content
+                existing_profile_artifact.title = (
+                    candidate.title.strip()
+                    or existing_profile_artifact.title
+                    or self._default_title(kind)
+                )
+                existing_profile_artifact.confidence = confidence
+                existing_profile_artifact.source = candidate.source
+                existing_profile_artifact.artifact_metadata = self._metadata_json(candidate)
+                existing_profile_artifact.session_id = None
+                await self.db.flush()
+                return MemoryArtifactDecision(
+                    action="update",
+                    kind=kind,
+                    content=content,
+                    reason="profile_artifact_refreshed",
+                    artifact_id=str(existing_profile_artifact.id),
+                    confidence=confidence,
+                )
+
         if kind == "summary" and session_id:
             existing = await self.get_session_summary(session_id)
             if existing:
@@ -151,7 +186,7 @@ class MemoryArtifactManager:
 
         artifact = DBMemoryArtifact(
             user_id=self.user_id,
-            session_id=session_id,
+            session_id=session_id if kind in {"summary", "episode"} else None,
             kind=kind,
             title=candidate.title.strip() or self._default_title(kind),
             content=content,
@@ -184,6 +219,31 @@ class MemoryArtifactManager:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def find_active_profile_artifact(
+        self,
+        *,
+        kind: str,
+        key: str,
+    ) -> DBMemoryArtifact | None:
+        result = await self.db.execute(
+            select(DBMemoryArtifact)
+            .where(
+                DBMemoryArtifact.user_id == self.user_id,
+                DBMemoryArtifact.kind == kind,
+                DBMemoryArtifact.is_active.is_(True),
+            )
+            .order_by(desc(DBMemoryArtifact.updated_at), desc(DBMemoryArtifact.created_at))
+            .limit(80)
+        )
+        for artifact in result.scalars().all():
+            try:
+                metadata = json.loads(str(artifact.artifact_metadata or "{}"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(metadata, dict) and str(metadata.get("key") or "").strip() == key:
+                return artifact
+        return None
 
     async def find_exact_active(
         self,

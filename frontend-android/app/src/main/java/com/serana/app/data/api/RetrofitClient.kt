@@ -1,6 +1,7 @@
 package com.serana.app.data.api
 
 import com.google.gson.Gson
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -53,6 +54,7 @@ object RetrofitClient {
 
     fun streamChatMessage(
         request: SendMessageRequest,
+        onCallReady: (Call) -> Unit = {},
         onEvent: (ChatStreamEvent) -> Unit,
     ) {
         val payload = gson.toJson(request.copy(stream = true))
@@ -61,7 +63,10 @@ object RetrofitClient {
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
-        streamingClient.newCall(httpRequest).execute().use { response ->
+        val call = streamingClient.newCall(httpRequest)
+        onCallReady(call)
+
+        call.execute().use { response ->
             if (!response.isSuccessful) {
                 throw IllegalStateException("Streaming request failed: ${response.code}")
             }

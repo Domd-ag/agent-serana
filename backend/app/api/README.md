@@ -21,4 +21,5 @@ api/
 
 - 路由文件只处理 HTTP 请求、响应组装、依赖注入和错误转换。
 - 业务逻辑优先放在 `app/agents/`、`app/memory/`、`app/skills/` 或 `app/core/`。
+- `chat.py` 在准备 Serana runtime 时会分别传递动态记忆与当前会话最近历史；不要在 API 层自行解释短跟进或拼接用户意图。
 - 修改 API 契约时，同步检查 Android data models、ViewModel 和对应 README。

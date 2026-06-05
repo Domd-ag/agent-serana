@@ -125,7 +125,7 @@ class AgentManager:
         self.agent_pools = {}
         self.agent_counts = {}
 
-        for agent_type in ["aide", "forge"]:
+        for agent_type in ["forge"]:
             manifest = load_manifest(agent_type)
             if manifest:
                 self.agent_counts[agent_type] = 0
@@ -170,11 +170,7 @@ class AgentManager:
         if current_count >= manifest.max_instances:
             raise RuntimeError(f"Max instances reached for {agent_type}: {manifest.max_instances}")
 
-        if agent_type == "aide":
-            from .aide import AideAgent
-
-            agent = AideAgent(self.llm)
-        elif agent_type == "forge":
+        if agent_type == "forge":
             from .forge import ForgeAgent
 
             agent = ForgeAgent(self.llm)

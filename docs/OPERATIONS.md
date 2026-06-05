@@ -14,8 +14,10 @@ start-backend.bat
 
 ```powershell
 cd backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --no-use-colors
 ```
+
+根目录 `start-backend.bat` 会固定使用 UTF-8，并关闭 Uvicorn ANSI 彩色日志，避免不支持 ANSI 的终端把颜色控制码显示成 `□[32m` 一类乱码。
 
 ## 常用配置
 

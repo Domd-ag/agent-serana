@@ -12,6 +12,7 @@ from app.approvals.service import resolve_approval_decision
 from app.agents.serana.runtime import prepare_serana_runtime
 from app.core import (
     AgentSession,
+    AsyncSessionLocal,
     ApprovalResponse,
     AuditRecord,
     AuditRecordResponse,
@@ -34,10 +35,55 @@ from app.core import (
 )
 from app.core.audit import append_audit_record, build_audit_insights, load_audit_records, serialize_audit_record
 from app.core.logger import get_logger
+from app.core.models import MemoryArtifact, WorkingMemory
 from app.memory import MemoryService
+from app.memory.background import schedule_memory_task
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = get_logger(__name__)
+
+
+async def _run_memory_consolidation(
+    *,
+    chat_session_id: str,
+    assistant_message_id: str,
+    user_input: str,
+    assistant_content: str,
+    user_id: str,
+    llm_config: dict | None,
+) -> None:
+    async with AsyncSessionLocal() as db:
+        memory_service = MemoryService(db, user_id)
+        consolidation_llm = None
+        if llm_config:
+            try:
+                consolidation_llm = get_llm_gateway().get_llm(
+                    user_config=llm_config["user_config"],
+                    use_backend_default=llm_config["use_backend_default"],
+                )
+            except Exception:
+                logger.exception("Memory consolidation LLM unavailable; falling back to rule extraction")
+
+        try:
+            consolidation_result = await memory_service.consolidate_chat_turn(
+                user_input=user_input,
+                session_id=chat_session_id,
+                assistant_content=assistant_content,
+                llm=consolidation_llm,
+            )
+            if consolidation_result["candidate_count"] or consolidation_result.get("artifact_candidate_count"):
+                append_audit_record(
+                    db,
+                    entity_type="chat_session",
+                    entity_id=chat_session_id,
+                    event_type="memory_consolidation",
+                    summary="Consolidated stable user context into long-term memory",
+                    payload=consolidation_result,
+                    message_id=assistant_message_id,
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("Background memory consolidation failed for session %s", chat_session_id)
 
 
 async def _delete_session_data(db: AsyncSession, session_ids: list[str]) -> int:
@@ -62,6 +108,12 @@ async def _delete_session_data(db: AsyncSession, session_ids: list[str]) -> int:
     )
     await db.execute(
         delete(AgentSession).where(AgentSession.chat_session_id.in_(session_ids))
+    )
+    await db.execute(
+        delete(MemoryArtifact).where(MemoryArtifact.session_id.in_(session_ids))
+    )
+    await db.execute(
+        delete(WorkingMemory).where(WorkingMemory.session_id.in_(session_ids))
     )
     await db.execute(
         delete(Message).where(Message.session_id.in_(session_ids))
@@ -166,6 +218,7 @@ async def _generate_assistant_payload(
             user_input,
             session_id=session_id,
             memory_context=prepared.memory_context,
+            recent_history_context=prepared.recent_history_context,
             resident_memory_context=prepared.resident_memory_context,
             working_memory_context=prepared.working_memory_context,
         )
@@ -305,6 +358,7 @@ async def _prepare_serana_chat_execution(
         "serana_agent": prepared.serana_agent,
         "memory_service": prepared.memory_service,
         "memory_context": prepared.memory_context,
+        "recent_history_context": prepared.recent_history_context,
         "resident_memory_context": prepared.resident_memory_context,
         "working_memory_context": prepared.working_memory_context,
         "memory_context_included": prepared.memory_context_included,
@@ -370,33 +424,16 @@ async def _persist_assistant_result(
     await db.refresh(assistant_message)
     await db.refresh(chat_session)
 
-    memory_service = MemoryService(db, user_id)
-    consolidation_llm = None
-    if llm_config:
-        try:
-            consolidation_llm = get_llm_gateway().get_llm(
-                user_config=llm_config["user_config"],
-                use_backend_default=llm_config["use_backend_default"],
-            )
-        except Exception:
-            logger.exception("Memory consolidation LLM unavailable; falling back to rule extraction")
-    consolidation_result = await memory_service.consolidate_chat_turn(
-        user_input=user_input,
-        session_id=chat_session.id,
-        assistant_content=assistant_content,
-        llm=consolidation_llm,
-    )
-    if consolidation_result["candidate_count"] or consolidation_result.get("artifact_candidate_count"):
-        append_audit_record(
-            db,
-            entity_type="chat_session",
-            entity_id=chat_session.id,
-            event_type="memory_consolidation",
-            summary="Consolidated stable user context into long-term memory",
-            payload=consolidation_result,
-            message_id=assistant_message.id,
+    schedule_memory_task(
+        _run_memory_consolidation(
+            chat_session_id=chat_session.id,
+            assistant_message_id=assistant_message.id,
+            user_input=user_input,
+            assistant_content=assistant_content,
+            user_id=user_id,
+            llm_config=llm_config,
         )
-        await db.commit()
+    )
 
     audit_records = await load_audit_records(db, "chat_session", chat_session.id)
     return assistant_message, audit_records
@@ -631,6 +668,7 @@ async def send_chat_message(
                     message_request.content,
                     session_id=chat_session.id,
                     memory_context=prepared["memory_context"],
+                    recent_history_context=prepared["recent_history_context"],
                     resident_memory_context=prepared["resident_memory_context"],
                     working_memory_context=prepared["working_memory_context"],
                 ):

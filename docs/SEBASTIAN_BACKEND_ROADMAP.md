@@ -35,9 +35,9 @@
 
 - `ConversationLoop` 已承载轻链路、planning flow 和升级决策。
 - goals 已支持 `direct` / `planned` / `delegated` 三档执行。
-- Aide / Forge 已作为 loop 内原生 delegation 动作，而不是旧 graph 阶段资产。
+- Serana 直接调度 Forge，Forge 已作为 loop 内原生 delegation worker，而不是旧 graph 阶段资产。
 - 旧 `GraphExecutor`、`serana_graph_stage` 等兼容入口已移除。
-- direct tools、browser tools、Aide、Forge、delegate 已统一使用 `serana.tool_result.v1`。
+- direct tools、browser tools、Forge、delegate 已统一使用 `serana.tool_result.v1`。
 
 仍需持续优化：
 

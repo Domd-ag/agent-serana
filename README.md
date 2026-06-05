@@ -1,10 +1,16 @@
 # Serana
 
+## 常用命令
+
+- 后端测试：`test-backend.bat`
+- 文档编码检查：`check-doc-encoding.bat`
+- 命令约定：[docs/COMMANDS.md](/D:/agent-serana/docs/COMMANDS.md)
+
 Serana 是一个面向个人自托管场景的 AI 管家项目，由 FastAPI 后端和 Android 客户端组成。当前目标是持续向 Sebastian 风格对齐：轻量对话优先、复杂任务按需升级、浏览器与 skill 能力可控接入。
 
 ## 当前状态
 
-- 后端已经统一到 `ConversationLoop`，简单请求优先走轻链路，复杂任务再升级到 planning flow 和 Aide / Forge 委派。
+- 后端已经统一到 `ConversationLoop`，简单请求优先走轻链路，复杂任务再由 Serana 升级到 planning flow 并直接调度 Forge。
 - 已接入 persona、working memory、instruction skills、工具结果回灌、浏览器 HTML 预览和审批流。
 - Android 端已具备聊天、设置、技能市场、审批弹窗和 App 内 `WebView` 演示预览。
 - Skill 生命周期已产品化到安装、启停、更新、卸载、来源、信任状态和生效范围。

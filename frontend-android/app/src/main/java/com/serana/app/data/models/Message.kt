@@ -21,6 +21,7 @@ enum class StreamStatus {
     STREAMING,
     WAITING_APPROVAL,
     RETRYING,
+    INTERRUPTED,
     FINALIZED,
     FAILED,
 }

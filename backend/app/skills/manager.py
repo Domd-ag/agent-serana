@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 import json
 import inspect
 from pathlib import Path
+import re
 import shutil
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import uuid
 
 from app.core.logger import get_logger
@@ -92,6 +93,11 @@ class SkillManager:
 
         if module:
             self.loader.load_tools_from_module(module, manifest)
+        if manifest.runtime == "script":
+            script_tools = self.loader.load_script_tools(skill_path, manifest)
+            if len(script_tools) != len(manifest.tools):
+                self.loader.unload_skill(manifest.name)
+                return None
 
         origin = self._get_skill_origin(skill_path)
         can_uninstall = origin == "managed"
@@ -154,6 +160,95 @@ class SkillManager:
             if skill.is_enabled and skill.runtime == "instruction" and skill.instruction_content
         ]
 
+    def find_relevant_executable_tools(
+        self,
+        user_input: str,
+        *,
+        agent_type: str = "serana",
+        max_tools: int = 6,
+    ) -> List[Dict[str, Any]]:
+        """Return installed executable tools whose declared domain matches the request."""
+        query = re.sub(r"\s+", " ", str(user_input or "").strip().lower())
+        if not query:
+            return []
+
+        matches: List[Dict[str, Any]] = []
+        for skill in self.skills.values():
+            if not skill.is_enabled or skill.runtime == "instruction" or not skill.manifest.tools:
+                continue
+            if skill.name == "browser":
+                continue
+            if skill.agent_type not in {"all", agent_type}:
+                continue
+
+            capability_score = sum(
+                12
+                for value in skill.manifest.capabilities
+                if str(value).strip().lower() in query
+            )
+            intent_score = sum(
+                16
+                for value in skill.manifest.intents
+                if str(value).strip().lower() in query
+            )
+            skill_tokens = self._relevance_tokens(
+                skill.name,
+                skill.description,
+                skill.manifest.registry_slug or "",
+            )
+
+            for tool in skill.manifest.tools:
+                score = capability_score + intent_score
+                tool_tokens = self._relevance_tokens(tool.name, tool.description)
+                score += sum(3 for token in skill_tokens if token in query)
+                score += sum(5 for token in tool_tokens if token in query)
+                if score <= 0:
+                    continue
+                matches.append(
+                    {
+                        "score": score,
+                        "full_name": f"{skill.name}.{tool.name}",
+                        "skill": skill,
+                        "tool": tool,
+                    }
+                )
+
+        matches.sort(key=lambda item: (-int(item["score"]), str(item["full_name"])))
+        return matches[:max_tools]
+
+    @staticmethod
+    def _relevance_tokens(*values: str) -> set[str]:
+        stopwords = {
+            "skill",
+            "tool",
+            "agent",
+            "assistant",
+            "一个",
+            "使用",
+            "支持",
+            "工具",
+            "技能",
+            "查询",
+            "获取",
+            "用于",
+        }
+        tokens: set[str] = set()
+        for value in values:
+            normalized = str(value or "").strip().lower()
+            tokens.update(
+                token
+                for token in re.findall(r"[a-z][a-z0-9_-]{2,}", normalized)
+                if token not in stopwords
+            )
+            for token in re.findall(r"[\u4e00-\u9fff]{2,}", normalized):
+                max_window = min(len(token), 4)
+                for window in range(2, max_window + 1):
+                    for start in range(len(token) - window + 1):
+                        piece = token[start : start + window]
+                        if piece not in stopwords:
+                            tokens.add(piece)
+        return tokens
+
     def enable_skill(self, skill_name: str) -> bool:
         if skill_name not in self.skills:
             return False
@@ -173,7 +268,7 @@ class SkillManager:
         return True
 
     def update_skill_scope(self, skill_name: str, agent_type: str) -> Optional[SkillPackage]:
-        if agent_type not in {"all", "serana", "aide", "forge"}:
+        if agent_type not in {"all", "serana", "forge"}:
             return None
         skill = self.skills.get(skill_name)
         if skill is None:
@@ -234,16 +329,31 @@ class SkillManager:
             return None
 
         target_path = self.managed_skills_path / manifest.name
+        backup_path = self.managed_skills_path / f".{manifest.name}.backup-{uuid.uuid4().hex}"
         if target_path.exists():
             tool_logger.warning("Skill %s already exists, overwriting...", manifest.name)
             self.unload_skill(manifest.name)
             self.skills.pop(manifest.name, None)
             if manifest.name in self.enabled_skills:
                 self.enabled_skills.remove(manifest.name)
-            shutil.rmtree(target_path)
+            target_path.rename(backup_path)
 
-        shutil.copytree(source_path, target_path)
-        return self._try_load_skill(target_path)
+        try:
+            shutil.copytree(source_path, target_path)
+            installed = self._try_load_skill(target_path)
+            if installed is None:
+                raise RuntimeError("Skill copied successfully but failed runtime registration.")
+            if backup_path.exists():
+                shutil.rmtree(backup_path, ignore_errors=True)
+            return installed
+        except Exception as exc:
+            tool_logger.error("Unable to install skill %s: %s", manifest.name, exc)
+            if target_path.exists():
+                shutil.rmtree(target_path, ignore_errors=True)
+            if backup_path.exists():
+                backup_path.rename(target_path)
+                self._try_load_skill(target_path)
+            return None
 
     def update_remote_skill_from_directory(self, skill_name: str, source_path: Path) -> Optional[SkillPackage]:
         current = self.skills.get(skill_name)
@@ -251,6 +361,13 @@ class SkillManager:
             return None
         manifest = self.inspect_skill_directory(source_path)
         if not manifest:
+            return None
+        if manifest.name != current.name:
+            tool_logger.error(
+                "Refusing update for %s: package name changed to %s",
+                skill_name,
+                manifest.name,
+            )
             return None
         if manifest.registry_slug != current.registry_slug:
             tool_logger.error(
@@ -265,14 +382,34 @@ class SkillManager:
         if not self._is_within(target_path, self.managed_skills_path):
             return None
 
+        backup_path = self.managed_skills_path / f".{skill_name}.update-backup-{uuid.uuid4().hex}"
         self.unload_skill(skill_name)
-        if target_path.exists():
-            shutil.rmtree(target_path)
-        shutil.copytree(source_path, target_path)
         self.skills.pop(skill_name, None)
         if skill_name in self.enabled_skills:
             self.enabled_skills.remove(skill_name)
-        return self._try_load_skill(target_path)
+        if target_path.exists():
+            target_path.rename(backup_path)
+
+        try:
+            shutil.copytree(source_path, target_path)
+            updated = self._try_load_skill(target_path)
+            if updated is None:
+                raise RuntimeError("Skill update copied successfully but failed runtime registration.")
+            if backup_path.exists():
+                shutil.rmtree(backup_path, ignore_errors=True)
+            return updated
+        except Exception as exc:
+            tool_logger.error("Unable to update skill %s: %s", skill_name, exc)
+            self.loader.unload_skill(skill_name)
+            self.skills.pop(skill_name, None)
+            if skill_name in self.enabled_skills:
+                self.enabled_skills.remove(skill_name)
+            if target_path.exists():
+                shutil.rmtree(target_path, ignore_errors=True)
+            if backup_path.exists():
+                backup_path.rename(target_path)
+                self._try_load_skill(target_path)
+            return None
 
     def stage_skill_installation(self, request_id: str, source_path: Path) -> Optional[SkillPackageManifest]:
         manifest = self.inspect_skill_directory(source_path)

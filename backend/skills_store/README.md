@@ -1,22 +1,33 @@
 # skills_store 目录说明
 
-这里是 Serana 后端的本地 skill 文件仓库。
-
-当前旧的内置 skill 已经全部清理，仓库默认不再携带 `weather`、`calculator`、`browser`、`time_manager` 等历史技能包。后续 skill 应通过 SkillHub 下载、远程安装或本地 ZIP 导入重新进入这里。
+这里是 Serana 后端的本地 Skill 文件仓库。
 
 ## 目录结构
 
 ```text
 skills_store/
 +-- README.md
-+-- installed/   运行时安装的 managed skills
-+-- .staging/    等待审批的本地 ZIP 导入暂存区
++-- browser/     项目内置浏览器基础工具
++-- installed/   已完成标准化并安装的 managed skills
++-- .staging/    等待审批的本地 ZIP 导入暂存
 ```
 
-`installed/` 与 `.staging/` 是运行时目录，内容不应作为默认内置能力提交。
+## 安装规则
+
+- SkillHub 下载包先经过 `SkillStandardizer`，再进入 `installed/`。
+- 有效的标准 Python 或 Script Skill 保留其运行时声明。
+- 安全、唯一入口的 `.sh` 包会自动转换为 `runtime=script` 和 `adapter=shell`。
+- 没有可执行入口的包保持 `runtime=instruction`。
+- 危险、不明确或运行环境不兼容的包会拒绝安装，不会留在 `installed/`。
+- 安装成功后，`SkillManager` 会立即注册工具，不需要重启或为领域单独写适配代码。
+- 更新或覆盖安装使用备份替换；新版本注册失败时会恢复上一版本。
+
+## 运行产物
+
+`browser/previews/` 保存 HTML 演示缓存，属于本地运行产物并由 `.gitignore` 忽略。
 
 ## 维护约定
 
-- 新增默认内置 skill 前，先确认它是否真的应该随项目分发。
-- SkillHub 安装的 skill 会被转换为本地 `skill.json` + `SKILL.md` 结构。
-- 删除、移动、重命名这里的目录时，同步更新 `app/skills/README.md`。
+- 删除、移动或重命名目录时同步更新本 README。
+- 新增 Runtime adapter 时同步更新 `backend/app/skills/README.md` 和 `docs/SKILL_RUNTIME_SPEC.md`。
+- `browser` 是基础能力，不属于 SkillHub 市场安装项。

@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Optional
 
 from app.core.logger import get_logger
 from app.skills.models import SkillPackageManifest
+from app.skills.script_runtime import ScriptSkillError, ScriptSkillRunner
 
 
 startup_logger = get_logger("app.startup.skills")
@@ -37,7 +38,7 @@ class SkillLoader:
         try:
             import json
 
-            with open(metadata_path, "r", encoding="utf-8") as file:
+            with open(metadata_path, "r", encoding="utf-8-sig") as file:
                 manifest_data = json.load(file)
             return SkillPackageManifest(**manifest_data)
         except Exception as exc:
@@ -97,6 +98,19 @@ class SkillLoader:
             else:
                 startup_logger.warning("Tool %s not found in module %s", tool_name, manifest.name)
 
+        return tools
+
+    def load_script_tools(self, skill_path: Path, manifest: SkillPackageManifest) -> Dict[str, Callable]:
+        if manifest.runtime != "script":
+            return {}
+        try:
+            tools = ScriptSkillRunner.build_tools(skill_path, manifest)
+        except ScriptSkillError as exc:
+            startup_logger.error("Unable to initialize Script Skill %s: %s", manifest.name, exc)
+            return {}
+        for tool_name, tool_func in tools.items():
+            self.loaded_tools[f"{manifest.name}.{tool_name}"] = tool_func
+            startup_logger.debug("Loaded Script Skill tool: %s.%s", manifest.name, tool_name)
         return tools
 
     def unload_skill(self, package_name: str):

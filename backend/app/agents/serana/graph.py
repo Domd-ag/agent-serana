@@ -7,6 +7,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 class AgentState(TypedDict):
     user_input: str
     original_user_input: str
+    resolved_user_input: str
+    recent_history_context: str
     resident_memory_context: str
     working_memory_context: str
     working_memory_entries: dict[str, str]
@@ -16,11 +18,11 @@ class AgentState(TypedDict):
     current_goal: Optional[str]
     goal_type: Optional[str]
     complexity: Optional[str]
+    analysis_source: str
     execution_mode: str
     delegation_plan: dict[str, Any]
     subtasks: list[dict[str, Any]]
     serana_status: str
-    aide_sessions: list[dict[str, Any]]
     forge_sessions: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
@@ -37,6 +39,7 @@ def create_initial_state(
     session_id: str,
     llm: BaseChatModel,
     memory_context: str = "",
+    recent_history_context: str = "",
     resident_memory_context: str = "",
     working_memory_context: str = "",
     approval_runtime: Optional[dict[str, Any]] = None,
@@ -45,6 +48,8 @@ def create_initial_state(
     return AgentState(
         user_input=user_input,
         original_user_input=user_input,
+        resolved_user_input="",
+        recent_history_context=recent_history_context,
         resident_memory_context=resident_memory_context,
         working_memory_context=working_memory_context,
         working_memory_entries={},
@@ -54,11 +59,11 @@ def create_initial_state(
         current_goal=None,
         goal_type=None,
         complexity=None,
+        analysis_source="",
         execution_mode="delegated",
         delegation_plan={},
         subtasks=[],
         serana_status="idle",
-        aide_sessions=[],
         forge_sessions=[],
         tool_calls=[],
         tool_results=[],

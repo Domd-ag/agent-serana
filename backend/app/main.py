@@ -8,6 +8,7 @@ from app.core.logger import configure_logging, get_logger
 from app.core.init_db import main as init_db_main
 from app.api import api_router
 from app.agents.serana import initialize_serana_persona
+from app.memory.background import shutdown_memory_tasks
 from app.skills import SkillManager
 from app.core.schemas import HealthResponse
 from app.core.exceptions import (
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         startup_logger.info("Shutting down Serana backend")
+        await shutdown_memory_tasks()
         await approval_manager.shutdown()
         await skill_manager.shutdown()
 

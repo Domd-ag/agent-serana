@@ -504,7 +504,7 @@ private fun MarketplaceSkillCard(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(modifier = Modifier.fillMaxWidth(0.72f)) {
-                Text(skill.displayName, style = MaterialTheme.typography.titleSmall)
+                Text(skill.displayName ?: skill.slug, style = MaterialTheme.typography.titleSmall)
                 Text(
                     text = listOfNotNull(skill.ownerHandle, skill.version?.let { "v$it" }).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
@@ -734,7 +734,7 @@ private fun SkillScopeSelector(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf("all", "serana", "aide", "forge").forEach { scope ->
+            listOf("all", "serana", "forge").forEach { scope ->
                 AssistChip(
                     onClick = { onScopeChange(scope) },
                     label = { Text(scopeLabel(scope)) },
@@ -749,7 +749,6 @@ private fun scopeLabel(scope: String): String {
     return when (scope.lowercase()) {
         "all" -> "全部"
         "serana" -> "Serana"
-        "aide" -> "Aide"
         "forge" -> "Forge"
         else -> scope
     }

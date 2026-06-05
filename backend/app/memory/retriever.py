@@ -89,8 +89,18 @@ class MemoryRetriever:
         # Summary-first: dense summaries outrank detailed episodes and raw history.
         priority = {"fact": 3, "preference": 3, "summary": 2, "episode": 1, "history": 0}
         items.sort(key=lambda x: (priority.get(x.memory_type, 0), x.relevance_score), reverse=True)
-        
-        return items[:limit]
+
+        deduped: List[MemoryItem] = []
+        seen_content: set[str] = set()
+        for item in items:
+            fingerprint = " ".join(str(item.content or "").lower().split())
+            if not fingerprint or fingerprint in seen_content:
+                continue
+            seen_content.add(fingerprint)
+            deduped.append(item)
+            if len(deduped) >= limit:
+                break
+        return deduped
 
     async def _retrieve_artifacts(
         self,

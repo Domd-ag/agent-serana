@@ -2,16 +2,15 @@
 
 ## Goal
 
-Define and implement the three-layer agent runtime that powers planning, delegation, and execution.
+Define and implement the chief-worker agent runtime that powers planning, delegation, and execution.
 
 ## Implemented Result
 
 The backend now includes:
 
 - `Serana` as the chief planner and router
-- `Aide` as the delegated coordinator
 - `Forge` as the worker executor
-- pooled `Aide` and `Forge` instances
+- pooled `Forge` instances
 - complexity routing between direct and delegated execution
 - dynamic delegation plans and parallel task handling
 
@@ -22,13 +21,7 @@ The backend now includes:
 - analyzes task complexity
 - decides direct or delegated execution mode
 - builds goal plans and chat execution paths
-
-### Aide
-
-- classifies delegated work
-- groups tasks into batches
-- coordinates retries
-- dispatches work to available `Forge` instances
+- classifies delegated work, controls retries, and dispatches available `Forge` instances
 
 ### Forge
 
@@ -47,4 +40,4 @@ The backend now includes:
 ## Follow-Up Work
 
 - keep tuning failure-path behavior
-- expand tests for edge cases in batching and retries
+- expand tests for edge cases in direct Forge dispatch and retries

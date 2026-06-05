@@ -1,13 +1,11 @@
 """
 Backend agent system.
 
-Includes the three primary agent roles:
+Includes the two primary agent roles:
 - Serana: chief singleton agent
-- Aide: coordination agent
 - Forge: worker agent
 """
 
-from .aide import AideAgent
 from .base import (
     AgentManifest,
     AgentManager,
@@ -32,6 +30,5 @@ __all__ = [
     "get_all_agent_types",
     "AgentManager",
     "SeranaAgent",
-    "AideAgent",
     "ForgeAgent",
 ]

@@ -7,9 +7,9 @@ This project should keep prioritizing reliable personal use over broad platform 
 ## Completed Foundation
 
 - backend API surface for chat, goals, memory, skills, audit, and LLM configuration
-- three-layer agent runtime
+- chief-worker agent runtime
 - delegated execution with complexity routing
-- pooled `Aide` and `Forge` instances
+- Serana-coordinated pooled `Forge` instances
 - unified audit records and debug endpoints
 
 ## Next Priorities

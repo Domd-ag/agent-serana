@@ -31,7 +31,7 @@ data class SkillTool(
 
 data class MarketplaceSkill(
     val slug: String,
-    val displayName: String,
+    val displayName: String?,
     val summary: String?,
     val version: String?,
     val ownerHandle: String?,

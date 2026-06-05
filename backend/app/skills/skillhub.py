@@ -19,6 +19,7 @@ from app.skills.models import (
     MarketplaceSkillSummary,
     SkillPackage,
 )
+from app.skills.standardizer import SkillStandardizationError, SkillStandardizer
 
 
 class SkillHubError(Exception):
@@ -62,6 +63,24 @@ class SkillHubClient:
 
     def _download_url(self, slug: str, version: Optional[str] = None) -> str:
         return self._build_url("/api/v1/download", {"slug": slug, "version": version})
+
+    def _normalize_sort(self, sort: Optional[str]) -> str:
+        normalized = (sort or "").strip().lower()
+        alias_map = {
+            "": "updated_at",
+            "updated": "updated_at",
+            "latest": "updated_at",
+            "updated_at": "updated_at",
+            "downloads": "downloads",
+            "popular": "downloads",
+            "stars": "stars",
+            "installs": "installs",
+            "score": "score",
+            "recommend": "score",
+            "recommended": "score",
+            "trending": "score",
+        }
+        return alias_map.get(normalized, "updated_at")
 
     def _installed_info(self, manager: SkillManager, slug: str) -> tuple[bool, Optional[str]]:
         for skill in manager.list_skills():
@@ -157,12 +176,13 @@ class SkillHubClient:
         sort: str = "updated",
     ) -> MarketplaceCatalogResponse:
         page = int(cursor) if cursor and str(cursor).isdigit() else 1
+        normalized_sort = self._normalize_sort(sort)
         payload = self._http_get_json(
             "/api/skills",
             {
                 "page": page,
                 "pageSize": limit,
-                "sortBy": sort,
+                "sortBy": normalized_sort,
             },
         )
         data_payload = payload.get("data") if isinstance(payload.get("data"), dict) else {}
@@ -257,6 +277,65 @@ class SkillHubClient:
         value = value.strip("_")
         return value or "imported_skill"
 
+    def _infer_capabilities_and_intents(
+        self,
+        *,
+        slug: str,
+        display_name: str,
+        summary: str | None,
+        skill_md_preview: str | None,
+    ) -> tuple[list[str], list[str]]:
+        source_text = " ".join(
+            part for part in (slug, display_name, summary or "", skill_md_preview or "") if part
+        ).lower()
+
+        capabilities: list[str] = []
+        intents: list[str] = []
+
+        def add_capability(*values: str) -> None:
+            for value in values:
+                if value and value not in capabilities:
+                    capabilities.append(value)
+
+        def add_intent(*values: str) -> None:
+            for value in values:
+                if value and value not in intents:
+                    intents.append(value)
+
+        if any(token in source_text for token in ("weather", "天气", "forecast", "温度", "降雨", "气温")):
+            add_capability("weather", "forecast", "天气", "预报")
+            add_intent("天气查询", "天气预报", "今日天气", "明天天气")
+
+        if any(token in source_text for token in ("time", "timezone", "日期", "时间", "时区", "calendar", "日历")):
+            add_capability("time", "calendar", "时间", "日期")
+            add_intent("时间查询", "日期查询", "时区转换")
+
+        if any(token in source_text for token in ("calc", "calculator", "math", "数学", "算术", "计算")):
+            add_capability("calculator", "math", "计算", "算术")
+            add_intent("计算", "数学运算", "算一下")
+
+        if any(token in source_text for token in ("memory", "记忆", "profile", "总结", "summary", "episode")):
+            add_capability("memory", "summary", "记忆", "总结")
+            add_intent("记住", "回忆", "总结对话")
+
+        if any(token in source_text for token in ("browser", "网页", "web", "搜索", "search", "crawl", "scrape")):
+            add_capability("browser", "web_search", "网页", "搜索")
+            add_intent("上网搜索", "打开网页", "查网页")
+
+        if any(token in source_text for token in ("code", "coding", "program", "开发", "编程", "代码")):
+            add_capability("coding", "implementation", "代码", "编程")
+            add_intent("写代码", "实现方案", "代码示例")
+
+        if any(token in source_text for token in ("travel", "trip", "旅行", "旅游", "行程")):
+            add_capability("travel", "planning", "旅行", "行程")
+            add_intent("旅行计划", "行程安排", "旅游建议")
+
+        if any(token in source_text for token in ("food", "meal", "recipe", "菜谱", "美食", "饮食")):
+            add_capability("food", "meal_planning", "美食", "菜谱")
+            add_intent("吃什么", "菜谱建议", "饮食建议")
+
+        return capabilities, intents
+
     def _build_local_skill_name(self, manager: SkillManager, slug: str) -> str:
         base_name = self._sanitize_name(slug)
         existing = manager.get_skill(base_name)
@@ -274,6 +353,16 @@ class SkillHubClient:
 
     def _extract_downloaded_skill(self, archive_path: Path, extract_dir: Path) -> Path:
         with zipfile.ZipFile(archive_path, "r") as zip_file:
+            extract_root = extract_dir.resolve()
+            for item in zip_file.infolist():
+                target = (extract_root / item.filename).resolve()
+                try:
+                    target.relative_to(extract_root)
+                except ValueError as exc:
+                    raise SkillHubError("下载的 SkillHub 技能包包含越界文件路径。") from exc
+                unix_mode = item.external_attr >> 16
+                if (unix_mode & 0o170000) == 0o120000:
+                    raise SkillHubError("下载的 SkillHub 技能包包含不允许的符号链接。")
             zip_file.extractall(extract_dir)
         if (extract_dir / "SKILL.md").exists():
             return extract_dir
@@ -290,25 +379,26 @@ class SkillHubClient:
         detail: MarketplaceSkillDetail,
         version: str,
     ) -> None:
-        manifest_payload = {
-            "name": local_name,
-            "version": version,
-            "description": detail.summary or f"从 SkillHub 导入的技能：{detail.display_name}",
-            "author": detail.owner_display_name or detail.owner_handle or "SkillHub",
-            "format": "sebastian_package",
-            "runtime": "instruction",
-            "instruction_file": "SKILL.md",
-            "entrypoint": None,
-            "registry_slug": detail.slug,
-            "source_url": detail.canonical_url,
-            "agent_type": "all",
-            "max_instances": 1,
-            "tools": [],
-        }
-        (skill_dir / "skill.json").write_text(
-            json.dumps(manifest_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        capabilities, intents = self._infer_capabilities_and_intents(
+            slug=detail.slug,
+            display_name=detail.display_name,
+            summary=detail.summary,
+            skill_md_preview=detail.skill_md_preview,
         )
+        try:
+            SkillStandardizer.standardize_marketplace_package(
+                skill_dir,
+                local_name=local_name,
+                version=version,
+                description=detail.summary or f"从 SkillHub 导入的技能：{detail.display_name}",
+                author=detail.owner_display_name or detail.owner_handle or "SkillHub",
+                registry_slug=detail.slug,
+                source_url=detail.canonical_url,
+                capabilities=capabilities,
+                intents=intents,
+            )
+        except SkillStandardizationError as exc:
+            raise SkillHubError(str(exc)) from exc
 
     def install_skill(
         self,

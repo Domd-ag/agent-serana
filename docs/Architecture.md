@@ -2,7 +2,7 @@
 
 ## Overview
 
-Serana is a personal AI assistant system built around a FastAPI backend and a three-layer agent runtime. The current implementation focuses on reliable local operation, traceability, and iterative expansion.
+Serana is a personal AI assistant system built around a FastAPI backend and a chief-worker agent runtime. The current implementation focuses on reliable local operation, traceability, and iterative expansion.
 
 ## High-Level Architecture
 
@@ -23,7 +23,6 @@ graph TB
 
     subgraph "Agents"
         Serana["Serana"]
-        Aide["Aide Pool"]
         Forge["Forge Pool"]
     end
 
@@ -36,10 +35,8 @@ graph TB
     Router --> Memory
     Router --> Serana
     Router --> Audit
-    Serana --> Aide
-    Aide --> Forge
+    Serana --> Forge
     Serana --> Gateway
-    Aide --> Gateway
     Forge --> Gateway
     Skills --> Forge
     Memory --> DB
@@ -63,10 +60,9 @@ The API layer exposes the HTTP surface for:
 
 ### Agent Layer
 
-The runtime uses three agent roles:
+The runtime uses two agent roles:
 
-- `Serana`: chief planner and router
-- `Aide`: delegated coordinator with classification, batching, and retry behavior
+- `Serana`: chief planner, router, coordinator, and retry controller
 - `Forge`: worker agent with task-type strategy selection
 
 ### Memory Layer
@@ -84,7 +80,7 @@ The audit subsystem records:
 - chat tool traces
 - goal lifecycle events
 - `Serana` execution steps
-- `Aide` and `Forge` execution records
+- `Forge` execution records
 
 It also exposes filtered audit queries, timelines, summaries, and per-entity debug endpoints.
 
@@ -96,7 +92,7 @@ It also exposes filtered audit queries, timelines, summaries, and per-entity deb
 2. load or create a chat session
 3. inject memory context
 4. analyze complexity through `Serana`
-5. either answer directly or delegate through `Aide` and `Forge`
+5. either answer directly or let `Serana` delegate concrete subtasks to `Forge`
 6. persist message traces and audit records
 7. expose history, audit, and debug views
 
@@ -123,7 +119,6 @@ It also exposes filtered audit queries, timelines, summaries, and per-entity deb
 Runtime limits are configured in `backend/app/agents/agent_limits.json`:
 
 - `Serana`: 1
-- `Aide`: 3
 - `Forge`: 5
 
 ### Worker Strategy

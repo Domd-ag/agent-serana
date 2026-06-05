@@ -7,7 +7,7 @@ Serana has moved beyond an architecture-only prototype. The backend now contains
 ## Backend Highlights
 
 - unified chat and goal execution routing
-- pooled `Aide` and `Forge` instances
+- Serana-coordinated pooled `Forge` instances
 - complexity-based delegation
 - task-type strategy selection
 - goal event tracking and audit timelines

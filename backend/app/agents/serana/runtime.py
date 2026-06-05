@@ -18,6 +18,7 @@ class SeranaRuntimeContext:
     serana_agent: SeranaAgent
     memory_service: MemoryService
     memory_context: str
+    recent_history_context: str
     resident_memory_context: str
     working_memory_context: str
     memory_context_included: bool
@@ -167,6 +168,7 @@ async def prepare_serana_runtime(
         memory_context=memory_sections["dynamic_memory_context"]
         if memory_flags["memory_context_included"]
         else "",
+        recent_history_context=memory_sections["history_memory_context"],
         resident_memory_context=memory_sections["resident_memory_context"]
         if memory_flags["resident_memory_included"]
         else "",

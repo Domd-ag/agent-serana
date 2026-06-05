@@ -79,7 +79,7 @@ interface ApiService {
     suspend fun getMarketplaceSkills(
         @Query("limit") limit: Int = 20,
         @Query("cursor") cursor: String? = null,
-        @Query("sort") sort: String = "updated",
+        @Query("sort") sort: String = "updated_at",
     ): Response<MarketplaceCatalogResponseDto>
 
     @GET("skills/marketplace/search")
@@ -416,7 +416,7 @@ data class MarketplaceInstallResponseDto(
 data class MarketplaceSkillDto(
     val slug: String,
     @SerializedName("display_name")
-    val displayName: String,
+    val displayName: String? = null,
     val summary: String? = null,
     val version: String? = null,
     @SerializedName("owner_handle")

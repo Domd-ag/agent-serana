@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +19,142 @@ USER_FACING_RESPONSE_STYLE = """\
 - Keep Chinese replies natural and polished. Avoid backend wording such as "步骤已完成", "artifact", "route", "agent", or "tool" unless the user explicitly asks about internals.
 - If memory is relevant, phrase it as continuity with the user, not as a record dump.
 """
+
+_INSTRUCTION_SKILL_STOPWORDS = {
+    "skill",
+    "skills",
+    "agent",
+    "assistant",
+    "serana",
+    "self",
+    "improving",
+    "improve",
+    "the",
+    "and",
+    "with",
+    "for",
+    "tool",
+    "tools",
+    "使用",
+    "用于",
+    "一个",
+    "一种",
+    "帮助",
+    "技能",
+    "工具",
+    "当前",
+    "支持",
+    "查询",
+}
+
+_WEATHER_DOMAIN_TERMS = (
+    "天气",
+    "气温",
+    "温度",
+    "降雨",
+    "下雨",
+    "体感",
+    "weather",
+    "forecast",
+    "temperature",
+    "rain",
+)
+
+_WEATHER_LIVE_CUES = (
+    "今天",
+    "明天",
+    "后天",
+    "现在",
+    "当前",
+    "实时",
+    "未来",
+    "这周",
+    "本周",
+    "下周",
+    "一周",
+    "预报",
+    "气温",
+    "温度",
+    "降雨",
+    "下雨",
+    "体感",
+    "湿度",
+    "风速",
+    "查一下",
+    "查查",
+    "查询",
+    "看一下",
+    "看看",
+    "搜一下",
+    "搜索",
+    "如何",
+    "怎么样",
+    "什么情况",
+    "today",
+    "tomorrow",
+    "current",
+    "now",
+    "forecast",
+    "temperature",
+    "rain",
+)
+
+_WEATHER_DISCUSSION_CUES = (
+    "喜欢什么天气",
+    "喜欢哪种天气",
+    "偏爱什么天气",
+    "讨厌什么天气",
+    "什么天气适合",
+    "哪种天气适合",
+    "为什么会下雨",
+    "天气为什么",
+    "天气是怎么形成",
+    "天气是什么",
+    "天气有几种",
+    "what weather do you like",
+    "favorite weather",
+    "why does it rain",
+    "what is weather",
+)
+
+
+def is_live_weather_request(user_input: str) -> bool:
+    """Return whether the user is asking for live or forecast weather data."""
+    raw_text = str(user_input or "").strip()
+    if not raw_text:
+        return False
+    lowered = raw_text.lower()
+    if not any(term in raw_text or term in lowered for term in _WEATHER_DOMAIN_TERMS):
+        return False
+
+    has_live_cue = any(cue in raw_text or cue in lowered for cue in _WEATHER_LIVE_CUES)
+    if any(cue in raw_text or cue in lowered for cue in _WEATHER_DISCUSSION_CUES) and not has_live_cue:
+        return False
+
+    if has_live_cue:
+        return True
+
+    # A concise "<place> weather" query is normally a request for current data.
+    weather_match = re.search(r"(.{1,32}?)(?:的)?(?:天气|weather)\s*[？?。.!！]*$", raw_text, re.IGNORECASE)
+    if not weather_match:
+        return False
+    candidate = weather_match.group(1).strip()
+    if not candidate or any(token in candidate for token in ("喜欢", "偏爱", "讨厌", "适合", "为什么", "什么")):
+        return False
+    return True
+
+
+def _is_weather_instruction_skill(skill: Any) -> bool:
+    manifest = getattr(skill, "manifest", None)
+    values = [
+        str(getattr(skill, "name", "") or ""),
+        str(getattr(skill, "description", "") or ""),
+        str(getattr(manifest, "registry_slug", "") or ""),
+        *[str(value) for value in list(getattr(manifest, "capabilities", []) or [])],
+        *[str(value) for value in list(getattr(manifest, "intents", []) or [])],
+    ]
+    normalized = " ".join(values).lower()
+    return any(term in normalized for term in _WEATHER_DOMAIN_TERMS)
 
 
 def add_thinking_block(state: dict[str, Any], title: str, content: str) -> dict[str, Any]:
@@ -55,7 +192,12 @@ def add_tool_call(
 
 
 def get_primary_user_input(state: dict[str, Any]) -> str:
-    return str(state.get("original_user_input") or state.get("user_input") or "").strip()
+    return str(
+        state.get("resolved_user_input")
+        or state.get("original_user_input")
+        or state.get("user_input")
+        or ""
+    ).strip()
 
 
 def build_contextual_request(
@@ -90,6 +232,107 @@ def build_contextual_request(
         sections.append(f"Available tools:\n{available_tool_context.strip()}")
 
     return "\n\n".join(sections)
+
+
+def _normalize_instruction_skill_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _extract_instruction_skill_tokens(*texts: str) -> set[str]:
+    tokens: set[str] = set()
+    for text in texts:
+        raw_text = str(text or "")
+        normalized = _normalize_instruction_skill_text(raw_text)
+        for token in re.findall(r"[a-z][a-z0-9_-]{2,}", normalized):
+            for piece in re.split(r"[_-]+", token):
+                piece = piece.strip()
+                if len(piece) >= 3 and piece not in _INSTRUCTION_SKILL_STOPWORDS:
+                    tokens.add(piece)
+        for token in re.findall(r"[\u4e00-\u9fff]{2,}", raw_text):
+            if token not in _INSTRUCTION_SKILL_STOPWORDS:
+                tokens.add(token)
+            if len(token) > 2:
+                max_window = min(len(token), 4)
+                for window in range(2, max_window + 1):
+                    for start in range(0, len(token) - window + 1):
+                        piece = token[start : start + window]
+                        if piece not in _INSTRUCTION_SKILL_STOPWORDS:
+                            tokens.add(piece)
+    return tokens
+
+
+def _score_instruction_skill_relevance(user_input: str, skill: Any) -> int:
+    query_text = str(user_input or "").strip()
+    if not query_text:
+        return 0
+
+    normalized_query = _normalize_instruction_skill_text(query_text)
+    manifest = getattr(skill, "manifest", None)
+    registry_slug = str(getattr(manifest, "registry_slug", "") or "")
+    source_url = str(getattr(manifest, "source_url", "") or "")
+    capabilities = list(getattr(manifest, "capabilities", []) or [])
+    intents = list(getattr(manifest, "intents", []) or [])
+
+    score = 0
+    for exact_hint in (
+        str(getattr(skill, "name", "") or ""),
+        registry_slug,
+        source_url.rsplit("/", 1)[-1],
+    ):
+        hint = _normalize_instruction_skill_text(exact_hint)
+        if hint and hint in normalized_query:
+            score += 8
+
+    for hint in capabilities:
+        normalized_hint = _normalize_instruction_skill_text(hint)
+        if normalized_hint and normalized_hint in normalized_query:
+            score += 10
+
+    for hint in intents:
+        normalized_hint = _normalize_instruction_skill_text(hint)
+        if normalized_hint and normalized_hint in normalized_query:
+            score += 12
+
+    tokens = _extract_instruction_skill_tokens(
+        str(getattr(skill, "name", "") or ""),
+        registry_slug,
+        str(getattr(skill, "description", "") or ""),
+        *capabilities,
+        *intents,
+    )
+    for token in tokens:
+        if token in normalized_query:
+            score += 3 if re.search(r"[\u4e00-\u9fff]", token) else 2
+
+    return score
+
+
+def get_relevant_instruction_skills(
+    user_input: str,
+    *,
+    max_skills: int = 4,
+) -> list[Any]:
+    skill_manager = SkillManager()
+    skill_manager.ensure_initialized()
+
+    instruction_skills = skill_manager.get_enabled_instruction_skills()
+    if not instruction_skills:
+        return []
+
+    if any(term in str(user_input or "").lower() for term in _WEATHER_DOMAIN_TERMS) and not is_live_weather_request(user_input):
+        instruction_skills = [skill for skill in instruction_skills if not _is_weather_instruction_skill(skill)]
+        if not instruction_skills:
+            return []
+
+    scored = [
+        (skill, _score_instruction_skill_relevance(user_input, skill))
+        for skill in instruction_skills
+    ]
+    relevant = [item for item in scored if item[1] > 0]
+    if relevant:
+        relevant.sort(key=lambda item: (-item[1], str(getattr(item[0], "name", ""))))
+        return [skill for skill, _score in relevant[:max_skills]]
+    return []
 
 
 @dataclass(frozen=True)
@@ -342,10 +585,8 @@ def ensure_instruction_skill_context(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("instruction_skill_context"):
         return state
 
-    skill_manager = SkillManager()
-    skill_manager.ensure_initialized()
-
-    instruction_skills = skill_manager.get_enabled_instruction_skills()
+    user_input = get_primary_user_input(state)
+    instruction_skills = get_relevant_instruction_skills(user_input)
     if not instruction_skills:
         return state
 

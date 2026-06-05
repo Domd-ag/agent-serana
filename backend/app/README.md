@@ -6,7 +6,7 @@
 
 ```text
 app/
-+-- agents/      Serana、Aide、Forge 以及 agent loop
++-- agents/      Serana、Forge 以及 agent loop
 +-- api/         FastAPI 路由
 +-- approvals/   策略门、审批管理与审批文案
 +-- browser/     浏览器会话、截图、HTML 预览和下载文件

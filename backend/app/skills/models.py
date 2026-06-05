@@ -19,6 +19,15 @@ class SkillTool(BaseModel):
     input_schema: SkillToolInputSchema
 
 
+class ScriptRuntimeConfig(BaseModel):
+    adapter: str = "python"
+    timeout_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
+    max_input_chars: int = Field(default=32768, ge=1024, le=262144)
+    max_output_chars: int = Field(default=65536, ge=1024, le=262144)
+    argument_order: List[str] = Field(default_factory=list)
+    output_format: str = "json"
+
+
 class SkillPackageManifest(BaseModel):
     name: str
     version: str
@@ -32,9 +41,12 @@ class SkillPackageManifest(BaseModel):
     source_url: Optional[str] = None
     agent_type: str = "forge"
     max_instances: int = 3
+    capabilities: List[str] = Field(default_factory=list)
+    intents: List[str] = Field(default_factory=list)
     tools: List[SkillTool] = Field(default_factory=list)
     dependencies: Optional[Dict[str, str]] = None
     permissions: Optional[List[str]] = None
+    script: Optional[ScriptRuntimeConfig] = None
 
 
 class SkillPackage(BaseModel):

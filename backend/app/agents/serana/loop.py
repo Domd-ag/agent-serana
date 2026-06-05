@@ -137,7 +137,6 @@ async def execute_planning_flow(
             details={
                 "subtask_count": len(state.get("subtasks", [])),
                 "parallel_slots": delegation_plan.get("parallel_slots", 0),
-                "parallel_aides": delegation_plan.get("parallel_aides", 0),
                 "parallel_forges": delegation_plan.get("parallel_forges", 0),
             },
         )
@@ -147,7 +146,6 @@ async def execute_planning_flow(
             action="delegate_agents",
             status="completed",
             details={
-                "aide_sessions": len(state.get("aide_sessions", [])),
                 "forge_sessions": len(state.get("forge_sessions", [])),
             },
         )
@@ -155,7 +153,6 @@ async def execute_planning_flow(
             state,
             stage="delegate",
             details={
-                "aide_sessions": len(state.get("aide_sessions", [])),
                 "forge_sessions": len(state.get("forge_sessions", [])),
                 "runtime": "conversation_loop",
             },
@@ -294,7 +291,7 @@ class ConversationLoop:
                 "complexity": planning_result.get("complexity"),
             },
         )
-        return planning_result, "delegated"
+        return planning_result, str(planning_result.get("execution_mode") or "planned")
 
 
 async def execute_serana_loop(
@@ -325,7 +322,7 @@ async def stream_serana_loop(
 
     yield {
         "type": "thinking",
-        "content": "Analyzing your request...",
+        "content": "Serana 正在理解请求...",
     }
 
     event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -356,7 +353,7 @@ async def stream_serana_loop(
                 last_thinking_emit = now
                 yield {
                     "type": "thinking",
-                    "content": "Still working on your request...",
+                    "content": "Serana 正在整理回复...",
                 }
             continue
         last_thinking_emit = asyncio.get_running_loop().time()

@@ -20,7 +20,9 @@ import com.serana.app.data.models.Role
 import com.serana.app.data.models.StreamStatus
 import com.serana.app.data.models.ThinkingBlock
 import com.serana.app.data.models.ToolTrace
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import java.util.UUID
 
 data class ChatDebugTimelineEntry(
@@ -94,6 +97,10 @@ class ChatViewModel : ViewModel() {
 
     private var currentSessionId: String? = null
     private val messageUpdateMutex = Mutex()
+    private var activeStreamJob: Job? = null
+    private var activeStreamCall: Call? = null
+    private var activeAssistantMessageId: String? = null
+    private val interruptedMessageIds = mutableSetOf<String>()
 
     private val _currentSessionId = MutableStateFlow<String?>(null)
     val activeSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
@@ -209,8 +216,11 @@ class ChatViewModel : ViewModel() {
         content: String,
         assistantMessageId: String,
     ) {
+        activeStreamJob?.cancel()
+        activeStreamCall?.cancel()
+        activeAssistantMessageId = assistantMessageId
         _isLoading.value = true
-        viewModelScope.launch {
+        activeStreamJob = viewModelScope.launch {
             var completedSessionId: String? = null
             try {
                 withContext(Dispatchers.IO) {
@@ -220,6 +230,9 @@ class ChatViewModel : ViewModel() {
                             sessionId = currentSessionId,
                             stream = true,
                         ),
+                        onCallReady = { call ->
+                            activeStreamCall = call
+                        },
                     ) { event ->
                         when (event) {
                             is ChatStreamEvent.ThinkingBlock -> appendThinkingBlock(assistantMessageId, event.block)
@@ -241,12 +254,21 @@ class ChatViewModel : ViewModel() {
                 }
                 completedSessionId = currentSessionId
             } catch (e: Exception) {
+                if (assistantMessageId in interruptedMessageIds || e is CancellationException) {
+                    return@launch
+                }
                 fallbackToNonStreaming(
                     content = content,
                     assistantMessageId = assistantMessageId,
                     error = e,
                 )
             } finally {
+                if (activeAssistantMessageId == assistantMessageId) {
+                    activeAssistantMessageId = null
+                    activeStreamCall = null
+                    activeStreamJob = null
+                }
+                interruptedMessageIds.remove(assistantMessageId)
                 _isLoading.value = false
             }
 
@@ -260,6 +282,24 @@ class ChatViewModel : ViewModel() {
                 }
             }
         }
+    }
+
+    fun interruptStreaming() {
+        val messageId = activeAssistantMessageId ?: _messages.value.lastOrNull {
+            it.role == Role.ASSISTANT && it.streamStatus in setOf(
+                StreamStatus.THINKING,
+                StreamStatus.STREAMING,
+                StreamStatus.RETRYING,
+                StreamStatus.WAITING_APPROVAL,
+            )
+        }?.id ?: return
+
+        interruptedMessageIds += messageId
+        _pendingApproval.value = null
+        _isLoading.value = false
+        activeStreamCall?.cancel()
+        activeStreamJob?.cancel(CancellationException("User interrupted streaming response"))
+        markAssistantInterrupted(messageId)
     }
 
     fun clearError() {
@@ -561,6 +601,20 @@ class ChatViewModel : ViewModel() {
     private fun replaceAssistantMessage(messageId: String, replacement: Message) {
         _messages.value = _messages.value.map { message ->
             if (message.id == messageId) replacement else message
+        }
+    }
+
+    private fun markAssistantInterrupted(messageId: String) {
+        _messages.value = _messages.value.map { message ->
+            if (message.id == messageId) {
+                val content = message.content.ifBlank { "已打断。" }
+                message.copy(
+                    content = content,
+                    streamStatus = StreamStatus.INTERRUPTED,
+                )
+            } else {
+                message
+            }
         }
     }
 

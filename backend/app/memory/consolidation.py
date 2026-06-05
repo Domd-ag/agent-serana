@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -179,7 +180,7 @@ class MemoryConsolidationService:
                 assistant_content=assistant_content,
                 messages=messages,
             )
-            if llm_candidates:
+            if llm_candidates is not None:
                 return llm_candidates
 
         return self._extract_with_rules(
@@ -196,41 +197,48 @@ class MemoryConsolidationService:
         user_input: str,
         assistant_content: str,
         messages: list[Any],
-    ) -> list[MemoryArtifactCandidate]:
+    ) -> list[MemoryArtifactCandidate] | None:
         window = self._conversation_window_text(
             messages,
             fallback_user=user_input,
             fallback_assistant=assistant_content,
         )
         try:
-            response = await llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a memory extractor for Serana. Extract only durable, useful memory artifacts. "
-                            "Return JSON only with this schema: "
-                            '{"artifacts":[{"kind":"fact|preference|summary|episode","title":"","content":"",'
-                            '"key":"","value":"","category":"","confidence":0.0,"evidence":""}]}. '
-                            "Use summary for a high-density session summary, episode for a concrete event or task outcome, "
-                            "fact/preference for stable user information. Do not copy raw user:/assistant: transcripts."
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Conversation window:\n{window}\n\n"
-                            "Extract memory candidates now."
-                        )
-                    ),
-                ]
+            response = await asyncio.wait_for(
+                llm.ainvoke(
+                    [
+                        SystemMessage(
+                            content=(
+                                "You are a memory extractor for Serana. Extract only durable, useful memory artifacts. "
+                                "Return JSON only with this schema: "
+                                '{"artifacts":[{"kind":"fact|preference|summary|episode","title":"","content":"",'
+                                '"key":"","value":"","category":"","confidence":0.0,"evidence":""}]}. '
+                                "Use summary for a high-density session summary, episode for a concrete event or task outcome, "
+                                "fact/preference for stable user information. Do not copy raw user:/assistant: transcripts. "
+                                'If nothing is durable or useful, return {"artifacts":[]}.'
+                            )
+                        ),
+                        HumanMessage(
+                            content=(
+                                f"Conversation window:\n{window}\n\n"
+                                "Extract memory candidates now."
+                            )
+                        ),
+                    ]
+                ),
+                timeout=30,
             )
+        except TimeoutError:
+            logger.warning("LLM memory extraction timed out; falling back to rule extraction")
+            return None
         except Exception:
             logger.exception("LLM memory extraction failed")
-            return []
+            return None
 
         parsed = self._parse_json_object(str(response.content))
         raw_artifacts = parsed.get("artifacts") if isinstance(parsed, dict) else None
         if not isinstance(raw_artifacts, list):
-            return []
+            return None
 
         candidates: list[MemoryArtifactCandidate] = []
         for raw in raw_artifacts:
@@ -432,15 +440,20 @@ class MemoryConsolidationService:
 
     @staticmethod
     def _build_rule_summary(messages: list[Any], *, user_input: str, assistant_content: str) -> str:
-        if messages:
+        meaningful_messages = [
+            message
+            for message in messages
+            if str(getattr(message, "content", "") or "").strip()
+        ]
+        if len(meaningful_messages) >= 4:
             user_messages = [
                 str(getattr(message, "content", "") or "").strip()
-                for message in messages
+                for message in meaningful_messages
                 if getattr(message, "role", "") == "user" and str(getattr(message, "content", "") or "").strip()
             ]
             assistant_messages = [
                 str(getattr(message, "content", "") or "").strip()
-                for message in messages
+                for message in meaningful_messages
                 if getattr(message, "role", "") == "assistant" and str(getattr(message, "content", "") or "").strip()
             ]
             if user_messages or assistant_messages:
@@ -450,15 +463,50 @@ class MemoryConsolidationService:
                     f"用户最近关注：{latest_user[:180]}。"
                     f"Serana 已回应/处理：{latest_assistant[:260]}。"
                 )
-        if user_input and assistant_content:
-            return f"用户最近关注：{user_input[:180]}。Serana 已回应/处理：{assistant_content[:260]}。"
         return ""
 
     @staticmethod
     def _build_rule_episode(*, user_input: str, assistant_content: str) -> str:
-        if not user_input or not assistant_content:
+        if (
+            not user_input
+            or not assistant_content
+            or len(assistant_content.strip()) < 24
+            or not MemoryConsolidationService._looks_like_episode(user_input)
+        ):
             return ""
         return f"用户请求：{user_input[:240]}。处理结果：{assistant_content[:420]}。"
+
+    @staticmethod
+    def _looks_like_episode(user_input: str) -> bool:
+        text = str(user_input or "").strip().lower()
+        if len(text) < 8:
+            return False
+        task_markers = (
+            "帮我",
+            "计划",
+            "整理",
+            "生成",
+            "实现",
+            "修复",
+            "安装",
+            "配置",
+            "决定",
+            "选择",
+            "购买",
+            "预订",
+            "学习",
+            "旅行",
+            "项目",
+            "任务",
+            "完成",
+            "build",
+            "create",
+            "fix",
+            "plan",
+            "install",
+            "configure",
+        )
+        return any(marker in text for marker in task_markers)
 
     @staticmethod
     def _episode_title(user_input: str) -> str:

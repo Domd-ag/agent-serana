@@ -11,7 +11,7 @@ trim_trailing_whitespace = true
 [*.md]
 trim_trailing_whitespace = false
 
-[*.{kt,kts,py,java,xml,json,yml,yaml,properties,txt}]
+[*.{kt,kts,py,java,xml,json,yml,yaml,properties,txt,ps1}]
 indent_size = 4
 
 [*.bat]

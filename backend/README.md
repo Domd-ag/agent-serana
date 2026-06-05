@@ -19,7 +19,7 @@ backend/
 
 - `app/main.py` 创建 FastAPI 应用、注册中间件、异常处理和 `/api/v1` 路由。
 - `app/api/` 提供 Android 端和调试端使用的 HTTP 接口。
-- `app/agents/` 实现 Serana、Aide、Forge 的 agent 运行时。
+- `app/agents/` 实现 Serana 主 agent 与 Forge 执行 worker 的运行时。
 - `app/core/` 放置数据库、模型、schema、LLM 网关、审计、日志等共享基础设施。
 - `app/memory/` 管理长期事实记忆、resident snapshot、working memory、历史检索和 prompt 注入。
 - `app/skills/` 负责 Sebastian 风格 skill 的加载、校验、启停、SkillHub 搜索/安装、更新、卸载和生命周期状态。
@@ -28,7 +28,7 @@ backend/
 ## 常用入口
 
 - 推荐启动：根目录运行 `start-backend.bat`
-- 手动启动：`uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+- 手动启动：`uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --no-use-colors`
 - 健康检查：`GET /health`
 - API 文档：`GET /docs`
 - 主聊天：`POST /api/v1/chat/message`

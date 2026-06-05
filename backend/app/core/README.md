@@ -37,6 +37,8 @@ core/
 - `audit.py`
   - 负责审计记录、调试摘要和关键执行洞察。
   - `planning_stages`、`tool_result_names`、`artifact_kinds` 等聚合字段也从这里产出。
+- `database.py`
+  - SQLite 运行时启用 WAL、15 秒 busy timeout 和外键约束，允许后台 Memory consolidation 与新的聊天请求安全并行。
 
 ## 维护约定
 
