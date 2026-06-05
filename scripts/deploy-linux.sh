@@ -190,6 +190,98 @@ EOF
   systemctl restart "$SERVICE_NAME"
 }
 
+write_management_menu() {
+  local menu_path="/root/serana-menu.sh"
+  local command_path="/usr/local/bin/serana"
+  log "Writing Serana management menu: $menu_path"
+  cat > "$menu_path" <<EOF
+#!/usr/bin/env bash
+set -u
+
+SERVICE_NAME="$SERVICE_NAME"
+APP_DIR="$APP_DIR"
+PORT="$PORT"
+PYTHON_BIN="$PYTHON_BIN"
+
+pause() {
+  printf '\n按回车返回菜单...'
+  read -r _
+}
+
+show_menu() {
+  clear 2>/dev/null || true
+  cat <<MENU
+Serana 管理面板
+================
+1. 启动 Serana
+2. 关闭 Serana
+3. 查看状态
+4. 查看实时日志
+5. 重启 Serana
+6. 健康检查
+7. 重新部署/更新
+0. 退出
+
+MENU
+}
+
+while true; do
+  show_menu
+  printf '请选择操作: '
+  read -r choice
+  case "\$choice" in
+    1)
+      systemctl start "\$SERVICE_NAME"
+      systemctl status "\$SERVICE_NAME" --no-pager
+      pause
+      ;;
+    2)
+      systemctl stop "\$SERVICE_NAME"
+      systemctl status "\$SERVICE_NAME" --no-pager
+      pause
+      ;;
+    3)
+      systemctl status "\$SERVICE_NAME" --no-pager
+      pause
+      ;;
+    4)
+      journalctl -u "\$SERVICE_NAME" -f
+      ;;
+    5)
+      systemctl restart "\$SERVICE_NAME"
+      systemctl status "\$SERVICE_NAME" --no-pager
+      pause
+      ;;
+    6)
+      curl -f "http://127.0.0.1:\$PORT/health" || true
+      printf '\n'
+      pause
+      ;;
+    7)
+      curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \\
+        | SERANA_PYTHON_BIN="\$PYTHON_BIN" bash
+      pause
+      ;;
+    0)
+      exit 0
+      ;;
+    *)
+      printf '无效选项：%s\n' "\$choice"
+      pause
+      ;;
+  esac
+done
+EOF
+
+  chmod 700 "$menu_path"
+
+  cat > "$command_path" <<EOF
+#!/usr/bin/env bash
+exec /root/serana-menu.sh "\$@"
+EOF
+  chmod 755 "$command_path"
+}
+
 print_summary() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -203,6 +295,7 @@ print_summary() {
   printf 'API docs:    http://%s:%s/docs\n' "${ip:-SERVER_IP}" "$PORT"
   printf '\n'
   printf 'Useful commands:\n'
+  printf '  serana\n'
   printf '  systemctl status %s\n' "$SERVICE_NAME"
   printf '  journalctl -u %s -f\n' "$SERVICE_NAME"
   printf '  systemctl restart %s\n' "$SERVICE_NAME"
@@ -216,6 +309,7 @@ main() {
   write_env_file
   install_python_deps
   write_systemd_service
+  write_management_menu
   print_summary
 }
 

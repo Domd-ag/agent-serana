@@ -55,6 +55,27 @@ systemctl status serana-backend
 curl http://127.0.0.1:8000/health
 ```
 
+脚本也会创建一个运维菜单。以后 SSH 到服务器后可以直接输入：
+
+```bash
+serana
+```
+
+菜单默认提供：
+
+```text
+1. 启动 Serana
+2. 关闭 Serana
+3. 查看状态
+4. 查看实时日志
+5. 重启 Serana
+6. 健康检查
+7. 重新部署/更新
+0. 退出
+```
+
+菜单文件位于 `/root/serana-menu.sh`，命令入口位于 `/usr/local/bin/serana`。后续如果要增加数据库备份、清理缓存、查看配置等操作，可以继续在这个菜单里扩展。
+
 查看日志：
 
 ```bash
