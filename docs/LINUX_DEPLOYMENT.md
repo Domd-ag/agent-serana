@@ -250,6 +250,31 @@ systemctl restart serana-backend
 
 ## 常见问题
 
+### GitHub 下载卡住或 `Encountered end of file`
+
+这通常是服务器到 GitHub 的网络连接中断，不是 Serana 代码本身的问题。新版部署脚本已经会自动尝试：
+
+1. 正常 `git clone --depth 1`
+2. 使用 `HTTP/1.1` 重新 clone
+3. 从 GitHub codeload 下载源码压缩包并解压
+
+如果第一条一键命令没有任何输出，可以先改成分步执行，方便看到卡在哪一步：
+
+```bash
+curl -fL --connect-timeout 15 --max-time 60 \
+  -o /tmp/deploy-linux.sh \
+  https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh
+
+bash -x /tmp/deploy-linux.sh
+```
+
+如果 `raw.githubusercontent.com` 或 `github.com` 在服务器上都不稳定，需要给服务器配置代理后再执行：
+
+```bash
+export https_proxy=http://PROXY_HOST:PROXY_PORT
+export http_proxy=http://PROXY_HOST:PROXY_PORT
+```
+
 ### App 连不上服务器
 
 检查：

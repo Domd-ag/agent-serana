@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO_URL="${SERANA_REPO_URL:-https://github.com/Domd-ag/agent-serana.git}"
 BRANCH="${SERANA_BRANCH:-main}"
+ARCHIVE_URL="${SERANA_ARCHIVE_URL:-https://codeload.github.com/Domd-ag/agent-serana/tar.gz/refs/heads/$BRANCH}"
 APP_DIR="${SERANA_APP_DIR:-/opt/serana}"
 DATA_DIR="${SERANA_DATA_DIR:-/var/lib/serana}"
 ENV_DIR="${SERANA_ENV_DIR:-/etc/serana}"
@@ -44,19 +45,19 @@ install_packages() {
     log "Installing system packages with apt"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
+    apt-get install -y git curl ca-certificates tar python3 python3-venv python3-pip
     return
   fi
 
   if command -v dnf >/dev/null 2>&1; then
     log "Installing system packages with dnf"
-    dnf install -y git curl ca-certificates python3 python3-pip
+    dnf install -y git curl ca-certificates tar python3 python3-pip
     return
   fi
 
   if command -v yum >/dev/null 2>&1; then
     log "Installing system packages with yum"
-    yum install -y git curl ca-certificates python3 python3-pip
+    yum install -y git curl ca-certificates tar python3 python3-pip
     return
   fi
 
@@ -77,13 +78,33 @@ sync_repo() {
   mkdir -p "$APP_DIR"
   if [ -d "$APP_DIR/.git" ]; then
     log "Updating repository in $APP_DIR"
-    git -C "$APP_DIR" fetch --prune origin
+    if ! git -C "$APP_DIR" fetch --prune origin; then
+      log "Git fetch failed. Retrying with HTTP/1.1."
+      git -c http.version=HTTP/1.1 -C "$APP_DIR" fetch --prune origin
+    fi
     git -C "$APP_DIR" checkout "$BRANCH"
-    git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+    if ! git -C "$APP_DIR" pull --ff-only origin "$BRANCH"; then
+      log "Git pull failed. Retrying with HTTP/1.1."
+      git -c http.version=HTTP/1.1 -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+    fi
   else
     log "Cloning $REPO_URL#$BRANCH into $APP_DIR"
     rm -rf "$APP_DIR"
-    git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+    if ! git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; then
+      log "Git clone failed. Retrying with HTTP/1.1."
+      if ! git -c http.version=HTTP/1.1 clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; then
+        log "Git clone still failed. Downloading source archive instead."
+        local archive_path extract_dir
+        archive_path="$(mktemp /tmp/serana-src.XXXXXX.tar.gz)"
+        extract_dir="$(mktemp -d /tmp/serana-src.XXXXXX)"
+        curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 -o "$archive_path" "$ARCHIVE_URL"
+        tar -xzf "$archive_path" -C "$extract_dir" --strip-components=1
+        rm -rf "$APP_DIR"
+        mkdir -p "$APP_DIR"
+        cp -a "$extract_dir/." "$APP_DIR/"
+        rm -rf "$archive_path" "$extract_dir"
+      fi
+    fi
   fi
   chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 }
