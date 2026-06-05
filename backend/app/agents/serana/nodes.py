@@ -3360,6 +3360,50 @@ def _should_synthesize_direct_tool_response(tool_name: str, user_input: str) -> 
     return False
 
 
+def _normalize_script_weather_tool_arguments(
+    *,
+    skill_name: str,
+    tool_name: str,
+    planned_args: dict[str, Any],
+    user_input: str,
+) -> dict[str, Any]:
+    skill = SkillManager().get_skill(skill_name)
+    if skill is None or skill.runtime != "script":
+        return planned_args
+
+    domain_text = " ".join(
+        [
+            skill.name,
+            tool_name,
+            skill.description or "",
+            " ".join(skill.manifest.capabilities),
+            " ".join(skill.manifest.intents),
+        ]
+    ).lower()
+    if "weather" not in domain_text and "天气" not in domain_text and "预报" not in domain_text:
+        return planned_args
+
+    location = _extract_weather_location_for_shortcut(user_input)
+    if location is None:
+        return planned_args
+
+    _, display_location = location
+    if not display_location:
+        return planned_args
+
+    normalized_args = dict(planned_args)
+    for key in ("city", "location", "query"):
+        if key in normalized_args:
+            normalized_args[key] = display_location
+            return normalized_args
+
+    if len(normalized_args) == 1:
+        only_key = next(iter(normalized_args))
+        if isinstance(normalized_args.get(only_key), str):
+            normalized_args[only_key] = display_location
+    return normalized_args
+
+
 def _is_explicit_memory_lookup(user_input: str) -> bool:
     text = str(user_input or "").lower()
     return any(
@@ -4140,6 +4184,12 @@ async def _execute_resolved_direct_tool_intent(
     tool_name = str(tool_intent["tool_name"])
     planned_args = dict(tool_intent["arguments"])
     tool = tool_intent["callable"]
+    planned_args = _normalize_script_weather_tool_arguments(
+        skill_name=skill_name,
+        tool_name=tool_name,
+        planned_args=planned_args,
+        user_input=user_input,
+    )
 
     if planned_tool_name == "browser.create_html_preview":
         cache_key = str(planned_args.get("cache_key") or "").strip()
