@@ -9,6 +9,7 @@
   - 包含普通 JSON 请求和技能 ZIP 的 multipart 上传。
 - `RetrofitClient.kt`
   - 负责 Retrofit / OkHttp 初始化。
+  - 从本地配置读取 Serana 后端服务器地址；未配置时不会发起聊天、技能或设置请求。
   - 负责流式聊天 SSE 事件解析。
   - 负责 artifact URL 拼接和下载地址组装。
 

@@ -23,11 +23,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --no-use-colors
 
 - `LOG_LEVEL`：日志级别。排查问题用 `DEBUG`，日常运行建议 `INFO`。
 - `DATABASE_URL`：数据库连接，默认 SQLite。
-- `DEFAULT_LLM_PROVIDER` / `DEFAULT_LLM_API_KEY` / `DEFAULT_LLM_BASE_URL` / `DEFAULT_LLM_MODEL`：默认 LLM 配置。
 - `HOST` / `PORT`：服务监听地址。
 - `CORS_ALLOW_ORIGINS`：允许访问后端的前端来源。
 - `SKILLHUB_BASE_URL`：SkillHub API 地址，默认 `https://api.skillhub.cn`。
 - `SKILLHUB_PUBLIC_BASE_URL`：SkillHub 站点地址，默认 `https://skillhub.cn`。
+
+LLM 配置由客户端通过 `/api/v1/llm/config` 写入数据库。后端没有默认 LLM；未配置时聊天和目标链路会返回明确的配置错误。
 
 ## 技能维护
 

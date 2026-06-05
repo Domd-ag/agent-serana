@@ -64,10 +64,11 @@ http://192.168.31.30:8000/api/v1/
 
 - `LOG_LEVEL`：日志级别，默认 `INFO`
 - `DATABASE_URL`：数据库地址，默认本地 SQLite
-- `DEFAULT_LLM_*`：默认 LLM 配置
 - `HOST` / `PORT`：服务监听地址
 - `SKILLHUB_BASE_URL`：SkillHub API 地址
 - `SKILLHUB_PUBLIC_BASE_URL`：SkillHub 站点地址
+
+LLM 不再由后端环境变量提供默认配置。首次使用时，先在 Android 设置里配置服务器地址，再保存 LLM 的 Base URL、API Key 和模型。
 
 ## 文档入口
 

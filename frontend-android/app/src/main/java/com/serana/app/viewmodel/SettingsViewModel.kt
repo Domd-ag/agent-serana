@@ -3,9 +3,7 @@ package com.serana.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.serana.app.data.api.LlmConfigCreateRequest
-import com.serana.app.data.api.LlmModeUpdateRequest
 import com.serana.app.data.api.RetrofitClient
-import com.serana.app.data.models.LlmConfig
 import com.serana.app.data.models.LlmMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class SettingsUiState(
+    val serverUrl: String = "",
+    val savedServerUrl: String = "",
     val provider: String = "openai",
     val apiKey: String = "",
     val baseUrl: String = "",
@@ -22,10 +22,11 @@ data class SettingsUiState(
     val savedProvider: String = "openai",
     val savedBaseUrl: String = "",
     val savedModel: String = "",
-    val mode: LlmMode = LlmMode.BACKEND_DEFAULT,
+    val mode: LlmMode = LlmMode.SERVER_CONNECTION,
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
+    val serverUrlError: String? = null,
     val providerError: String? = null,
     val modelError: String? = null,
     val baseUrlError: String? = null,
@@ -48,19 +49,30 @@ class SettingsViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(isLoading = true, error = null, statusMessage = null)
         viewModelScope.launch {
             try {
-                val modeResponse = withContext(Dispatchers.IO) { RetrofitClient.apiService.getLlmMode() }
-                val configResponse = withContext(Dispatchers.IO) { RetrofitClient.apiService.getLlmConfig() }
-                if (!modeResponse.isSuccessful) {
-                    throw IllegalStateException("Failed to load LLM mode")
+                val serverUrl = RetrofitClient.configuredServerUrl
+                if (serverUrl.isBlank()) {
+                    _uiState.value = _uiState.value.copy(
+                        serverUrl = "",
+                        savedServerUrl = "",
+                        mode = LlmMode.SERVER_CONNECTION,
+                        isLoading = false,
+                        configExists = false,
+                        statusMessage = "请先配置手机 App 要连接的 Serana 后端地址。",
+                    )
+                    return@launch
                 }
-                val mode = LlmMode.fromWireValue(modeResponse.body()?.mode ?: LlmMode.BACKEND_DEFAULT.wireValue)
+
+                val configResponse = withContext(Dispatchers.IO) { RetrofitClient.apiService.getLlmConfig() }
+                if (!configResponse.isSuccessful) {
+                    throw IllegalStateException("无法读取服务器上的 LLM 配置，请检查服务器地址。")
+                }
                 val config = configResponse.body()
                 val provider = config?.provider ?: "openai"
-                val baseUrl = config?.baseUrl ?: defaultBaseUrlFor(provider)
-                val model = config?.model.orEmpty().ifBlank {
-                    defaultModelsFor(provider).firstOrNull().orEmpty()
-                }
+                val baseUrl = config?.baseUrl.orEmpty()
+                val model = config?.model.orEmpty()
                 _uiState.value = _uiState.value.copy(
+                    serverUrl = serverUrl,
+                    savedServerUrl = serverUrl,
                     provider = provider,
                     apiKey = "",
                     baseUrl = baseUrl,
@@ -68,7 +80,7 @@ class SettingsViewModel : ViewModel() {
                     savedProvider = provider,
                     savedBaseUrl = baseUrl,
                     savedModel = model,
-                    mode = mode,
+                    mode = if (config == null) LlmMode.SERVER_CONNECTION else _uiState.value.mode,
                     isLoading = false,
                     configExists = config != null,
                     modelSuggestions = defaultModelsFor(provider),
@@ -76,7 +88,7 @@ class SettingsViewModel : ViewModel() {
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to load settings",
+                    error = e.message ?: "加载设置失败。",
                 )
             }
         }
@@ -98,36 +110,45 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun updateApiKey(value: String) = updateState { copy(apiKey = value, apiKeyError = null) }
+    fun updateServerUrl(value: String) = updateState { copy(serverUrl = value, serverUrlError = null) }
     fun updateBaseUrl(value: String) = updateState { copy(baseUrl = value, baseUrlError = null) }
     fun updateModel(value: String) = updateState { copy(model = value, modelError = null) }
     fun updateMode(value: LlmMode) = updateState { copy(mode = value, error = null) }
 
     fun saveSettings() {
         val snapshot = _uiState.value
+        if (snapshot.mode == LlmMode.SERVER_CONNECTION) {
+            saveServerConnection(snapshot)
+            return
+        }
+
+        val serverUrlError = validateServerUrl(snapshot.serverUrl)
         val providerError = validateProvider(snapshot.provider)
         val modelError = validateModel(snapshot.model)
         val baseUrlError = validateBaseUrl(snapshot.baseUrl)
         val apiKeyError = validateApiKey(snapshot)
 
-        if (providerError != null || modelError != null || baseUrlError != null || apiKeyError != null) {
+        if (serverUrlError != null || providerError != null || modelError != null || baseUrlError != null || apiKeyError != null) {
             _uiState.value = snapshot.copy(
+                serverUrlError = serverUrlError,
                 providerError = providerError,
                 modelError = modelError,
                 baseUrlError = baseUrlError,
                 apiKeyError = apiKeyError,
-                error = "Please fix the highlighted fields.",
+                error = "请先修正标红的配置项。",
             )
             return
         }
 
         if (snapshot.model.isBlank()) {
-            _uiState.value = snapshot.copy(error = "Model is required.", modelError = "Model is required.")
+            _uiState.value = snapshot.copy(error = "请填写模型。", modelError = "请填写模型。")
             return
         }
         _uiState.value = snapshot.copy(
             isSaving = true,
             error = null,
             statusMessage = null,
+            serverUrlError = null,
             providerError = null,
             modelError = null,
             baseUrlError = null,
@@ -135,6 +156,7 @@ class SettingsViewModel : ViewModel() {
         )
         viewModelScope.launch {
             try {
+                RetrofitClient.setServerRootUrl(snapshot.serverUrl)
                 if (snapshot.apiKey.isNotBlank() || !snapshot.configExists) {
                     val configResponse = withContext(Dispatchers.IO) {
                         RetrofitClient.apiService.saveLlmConfig(
@@ -147,23 +169,16 @@ class SettingsViewModel : ViewModel() {
                         )
                     }
                     if (!configResponse.isSuccessful) {
-                        throw IllegalStateException("Failed to save LLM config")
+                        throw IllegalStateException("保存 LLM 配置失败。")
                     }
                 }
 
-                val modeResponse = withContext(Dispatchers.IO) {
-                    RetrofitClient.apiService.updateLlmMode(
-                        LlmModeUpdateRequest(mode = snapshot.mode.wireValue),
-                    )
-                }
-                if (!modeResponse.isSuccessful) {
-                    throw IllegalStateException("Failed to update LLM mode")
-                }
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    statusMessage = "Settings saved.",
+                    statusMessage = "LLM 配置已保存。",
                     error = null,
                     apiKey = "",
+                    savedServerUrl = RetrofitClient.configuredServerUrl,
                     savedProvider = snapshot.provider,
                     savedBaseUrl = snapshot.baseUrl,
                     savedModel = snapshot.model,
@@ -172,7 +187,7 @@ class SettingsViewModel : ViewModel() {
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    error = e.message ?: "Failed to save settings",
+                    error = e.message ?: "保存设置失败。",
                 )
             }
         }
@@ -182,9 +197,12 @@ class SettingsViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(isSaving = true, error = null, statusMessage = null)
         viewModelScope.launch {
             try {
+                if (!RetrofitClient.isConfigured) {
+                    throw IllegalStateException("请先配置服务器地址。")
+                }
                 val response = withContext(Dispatchers.IO) { RetrofitClient.apiService.deleteLlmConfig() }
                 if (!response.isSuccessful) {
-                    throw IllegalStateException("Failed to delete LLM config")
+                    throw IllegalStateException("删除 LLM 配置失败。")
                 }
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
@@ -195,12 +213,12 @@ class SettingsViewModel : ViewModel() {
                     savedBaseUrl = "",
                     savedModel = "",
                     configExists = false,
-                    statusMessage = "Saved config removed.",
+                    statusMessage = "LLM 配置已删除。",
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    error = e.message ?: "Failed to delete config",
+                    error = e.message ?: "删除配置失败。",
                 )
             }
         }
@@ -210,11 +228,47 @@ class SettingsViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(
             error = null,
             statusMessage = null,
+            serverUrlError = null,
             providerError = null,
             modelError = null,
             baseUrlError = null,
             apiKeyError = null,
         )
+    }
+
+    private fun saveServerConnection(snapshot: SettingsUiState) {
+        val serverUrlError = validateServerUrl(snapshot.serverUrl)
+        if (serverUrlError != null) {
+            _uiState.value = snapshot.copy(
+                serverUrlError = serverUrlError,
+                error = "请先填写可访问的服务器地址。",
+            )
+            return
+        }
+
+        _uiState.value = snapshot.copy(
+            isSaving = true,
+            error = null,
+            statusMessage = null,
+            serverUrlError = null,
+        )
+        viewModelScope.launch {
+            try {
+                RetrofitClient.setServerRootUrl(snapshot.serverUrl)
+                _uiState.value = _uiState.value.copy(
+                    isSaving = false,
+                    serverUrl = RetrofitClient.configuredServerUrl,
+                    savedServerUrl = RetrofitClient.configuredServerUrl,
+                    statusMessage = "服务器地址已保存。接下来请配置 LLM。",
+                    mode = LlmMode.LLM_CONFIG,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isSaving = false,
+                    error = e.message ?: "保存服务器地址失败。",
+                )
+            }
+        }
     }
 
     private fun updateState(transform: SettingsUiState.() -> SettingsUiState) {
@@ -226,11 +280,20 @@ class SettingsViewModel : ViewModel() {
 }
 
 private fun validateProvider(provider: String): String? {
-    return if (provider.isBlank()) "Provider is required." else null
+    return if (provider.isBlank()) "请填写 Provider。" else null
 }
 
 private fun validateModel(model: String): String? {
-    return if (model.isBlank()) "Model is required." else null
+    return if (model.isBlank()) "请填写模型。" else null
+}
+
+private fun validateServerUrl(serverUrl: String): String? {
+    if (serverUrl.isBlank()) return "请填写服务器地址。"
+    return if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
+        null
+    } else {
+        "服务器地址必须以 http:// 或 https:// 开头。"
+    }
 }
 
 private fun validateBaseUrl(baseUrl: String): String? {
@@ -238,7 +301,7 @@ private fun validateBaseUrl(baseUrl: String): String? {
     return if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
         null
     } else {
-        "Base URL must start with http:// or https://"
+        "Base URL 必须以 http:// 或 https:// 开头。"
     }
 }
 
@@ -249,10 +312,10 @@ private fun validateApiKey(state: SettingsUiState): String? {
             state.model != state.savedModel
 
     return when {
-        state.mode == LlmMode.USER_CONFIG && state.apiKey.isBlank() && !state.configExists ->
-            "API key is required for user config mode."
+        state.mode == LlmMode.LLM_CONFIG && state.apiKey.isBlank() && !state.configExists ->
+            "首次保存 LLM 配置必须填写 API Key。"
         state.configExists && configFieldsChanged && state.apiKey.isBlank() ->
-            "Re-enter the API key before changing the saved model config."
+            "修改已保存的 LLM 配置时，请重新输入 API Key。"
         else -> null
     }
 }

@@ -26,7 +26,7 @@ core/
 
 - `config.py`
   - 集中读取 `backend/.env`。
-  - 包含应用版本、日志级别、CORS、数据库、默认 LLM、服务端口和 SkillHub 配置。
+  - 包含应用版本、日志级别、CORS、数据库、服务端口和 SkillHub 配置；不再保存默认 LLM 配置。
 - `schemas.py`
   - 定义聊天、审批、技能、记忆等接口的共享模型。
 - `artifacts.py`
@@ -46,3 +46,4 @@ core/
 - 新增共享 schema、artifact 或 `tool_result` 字段时，同步检查 Android DTO 是否需要更新。
 - 修改 `schemas.py` 后，优先回看 [backend/app/api/README.md](/D:/agent-serana/backend/app/api/README.md) 和客户端解析代码。
 - 新增环境变量时，同步更新 `backend/.env.example`、根目录 [README.md](/D:/agent-serana/README.md) 和 [docs/OPERATIONS.md](/D:/agent-serana/docs/OPERATIONS.md)。
+- 需要模型能力的链路统一读取数据库里的用户 LLM 配置，缺失时返回配置错误，不走环境变量兜底。

@@ -1,5 +1,6 @@
 package com.serana.app.data.api
 
+import android.content.Context
 import com.google.gson.Gson
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,8 +13,12 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    private const val BASE_URL = "http://192.168.31.30:8000/api/v1/"
+    private const val PREFS_NAME = "serana_network"
+    private const val KEY_SERVER_ROOT_URL = "server_root_url"
     private val gson = Gson()
+    @Volatile private var appContext: Context? = null
+    @Volatile private var serverRootUrl: String = ""
+    @Volatile private var service: ApiService? = null
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
@@ -30,20 +35,49 @@ object RetrofitClient {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .client(client)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
+    val configuredServerUrl: String
+        get() = serverRootUrl
 
-    val apiService: ApiService = retrofit.create(ApiService::class.java)
+    val isConfigured: Boolean
+        get() = serverRootUrl.isNotBlank()
+
+    val apiService: ApiService
+        get() = service ?: synchronized(this) {
+            service ?: buildRetrofit().create(ApiService::class.java).also { service = it }
+        }
+
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        val savedUrl = appContext
+            ?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ?.getString(KEY_SERVER_ROOT_URL, "")
+            .orEmpty()
+        if (savedUrl.isNotBlank()) {
+            setServerRootUrl(savedUrl, persist = false)
+        }
+    }
+
+    fun setServerRootUrl(url: String, persist: Boolean = true) {
+        val normalized = normalizeServerRootUrl(url)
+        synchronized(this) {
+            serverRootUrl = normalized
+            service = null
+        }
+        if (persist) {
+            appContext
+                ?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                ?.edit()
+                ?.putString(KEY_SERVER_ROOT_URL, normalized)
+                ?.apply()
+        }
+    }
 
     fun resolveApiUrl(pathOrUrl: String): String {
         if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
             return pathOrUrl
         }
         val normalizedPath = pathOrUrl.removePrefix("/")
-        val apiRoot = BASE_URL.removeSuffix("/")
+        val apiRoot = apiBaseUrl().removeSuffix("/")
         return if (normalizedPath.startsWith("api/v1/")) {
             val serverRoot = apiRoot.removeSuffix("api/v1")
             "$serverRoot$normalizedPath"
@@ -59,7 +93,7 @@ object RetrofitClient {
     ) {
         val payload = gson.toJson(request.copy(stream = true))
         val httpRequest = Request.Builder()
-            .url("${BASE_URL}chat/message")
+            .url("${apiBaseUrl()}chat/message")
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
@@ -120,6 +154,31 @@ object RetrofitClient {
                     }
                 }
             }
+        }
+    }
+
+    private fun buildRetrofit(): Retrofit {
+        return Retrofit.Builder()
+            .baseUrl(apiBaseUrl())
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+    }
+
+    private fun apiBaseUrl(): String {
+        val root = serverRootUrl.trimEnd('/')
+        if (root.isBlank()) {
+            throw IllegalStateException("请先在设置里配置服务器地址。")
+        }
+        return "$root/api/v1/"
+    }
+
+    private fun normalizeServerRootUrl(url: String): String {
+        val trimmed = url.trim().trimEnd('/')
+        return when {
+            trimmed.endsWith("/api/v1") -> trimmed.removeSuffix("/api/v1")
+            trimmed.endsWith("/api/v1/") -> trimmed.removeSuffix("/api/v1/")
+            else -> trimmed
         }
     }
 }

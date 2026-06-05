@@ -109,63 +109,51 @@ fun SettingsScreen(
                 }
 
                 SettingsPanel {
-                    Text("LLM 模式", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        text = "决定使用后端默认模型，还是使用你自己的服务配置。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ModeOption(
+                        title = "连接服务器",
+                        body = "配置手机 App 要连接的 Serana 后端地址。",
+                        selected = uiState.mode == LlmMode.SERVER_CONNECTION,
+                        onSelect = { viewModel.updateMode(LlmMode.SERVER_CONNECTION) },
                     )
                     ModeOption(
-                        title = "后端默认",
-                        body = "使用后端统一维护的模型选择。",
-                        selected = uiState.mode == LlmMode.BACKEND_DEFAULT,
-                        onSelect = { viewModel.updateMode(LlmMode.BACKEND_DEFAULT) },
-                    )
-                    ModeOption(
-                        title = "个人配置",
-                        body = "使用你在当前设备上配置的 provider 与模型。",
-                        selected = uiState.mode == LlmMode.USER_CONFIG,
-                        onSelect = { viewModel.updateMode(LlmMode.USER_CONFIG) },
+                        title = "LLM 配置",
+                        body = "在当前服务器上保存 Base URL、API Key 和模型。",
+                        selected = uiState.mode == LlmMode.LLM_CONFIG,
+                        onSelect = { viewModel.updateMode(LlmMode.LLM_CONFIG) },
                     )
                 }
 
+                if (uiState.mode == LlmMode.SERVER_CONNECTION) {
+                    SettingsPanel {
+                        Text("连接服务器", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value = uiState.serverUrl,
+                            onValueChange = viewModel::updateServerUrl,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("服务器地址") },
+                            placeholder = { Text("例如 http://192.168.31.30:8000") },
+                            isError = uiState.serverUrlError != null,
+                            supportingText = {
+                                Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
+                            },
+                        )
+                        Button(
+                            onClick = { viewModel.saveSettings() },
+                            enabled = !uiState.isSaving,
+                        ) {
+                            Text(if (uiState.isSaving) "保存中…" else "保存服务器")
+                        }
+                    }
+                }
+
+                if (uiState.mode == LlmMode.LLM_CONFIG) {
                 SettingsPanel {
-                    Text("模型配置", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text("LLM 配置", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "先选 provider 预设，再选择模型，或者手动输入模型标识。",
+                        text = "配置当前服务器用于对话的模型服务。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    PresetRow(
-                        items = uiState.providerPresets,
-                        onSelect = viewModel::updateProvider,
-                    )
-                    OutlinedTextField(
-                        value = uiState.provider,
-                        onValueChange = viewModel::updateProvider,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Provider") },
-                        isError = uiState.providerError != null,
-                        supportingText = {
-                            Text(uiState.providerError ?: "例如：openai、openrouter、ollama")
-                        },
-                    )
-                    OutlinedTextField(
-                        value = uiState.model,
-                        onValueChange = viewModel::updateModel,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("模型") },
-                        isError = uiState.modelError != null,
-                        supportingText = {
-                            Text(uiState.modelError ?: "可直接点建议项，也可以手动填写模型 ID。")
-                        },
-                    )
-                    if (uiState.modelSuggestions.isNotEmpty()) {
-                        PresetRow(
-                            items = uiState.modelSuggestions,
-                            onSelect = viewModel::updateModel,
-                        )
-                    }
                     OutlinedTextField(
                         value = uiState.baseUrl,
                         onValueChange = viewModel::updateBaseUrl,
@@ -173,14 +161,7 @@ fun SettingsScreen(
                         label = { Text("Base URL") },
                         isError = uiState.baseUrlError != null,
                         supportingText = {
-                            Text(
-                                uiState.baseUrlError ?: when (uiState.provider.lowercase()) {
-                                    "openai" -> "留空即可使用默认 OpenAI 地址。"
-                                    "openrouter" -> "通常是 https://openrouter.ai/api/v1"
-                                    "ollama" -> "模拟器通常用 http://10.0.2.2:11434/v1"
-                                    else -> "可选的自定义服务地址。"
-                                },
-                            )
+                            Text(uiState.baseUrlError ?: "填写 OpenAI 兼容接口地址，例如 https://openrouter.ai/api/v1")
                         },
                     )
                     OutlinedTextField(
@@ -207,9 +188,19 @@ fun SettingsScreen(
                                 uiState.apiKeyError ?: if (uiState.configExists) {
                                     "留空表示继续使用当前已保存的 Key。"
                                 } else {
-                                    "保存新的个人配置时必须提供 Key。"
+                                    "首次保存 LLM 配置时必须提供 Key。"
                                 },
                             )
+                        },
+                    )
+                    OutlinedTextField(
+                        value = uiState.model,
+                        onValueChange = viewModel::updateModel,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("模型") },
+                        isError = uiState.modelError != null,
+                        supportingText = {
+                            Text(uiState.modelError ?: "填写模型 ID，例如 openai/gpt-5 或 deepseek-chat。")
                         },
                     )
                     Row(
@@ -229,6 +220,7 @@ fun SettingsScreen(
                             Text("删除配置")
                         }
                     }
+                }
                 }
             }
         }

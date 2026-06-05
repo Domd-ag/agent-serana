@@ -12,7 +12,7 @@ api/
 +-- browser.py     截图、HTML 预览、下载文件访问
 +-- chat.py        聊天消息、流式事件、会话历史
 +-- goals.py       目标、子任务与目标调试
-+-- llm.py         LLM 配置与模式切换
++-- llm.py         LLM 配置读写；旧模式接口只保留兼容
 +-- memory.py      记忆事实、摘要、检索
 +-- skills.py      本地技能、SkillHub 市场、导入与卸载
 ```
@@ -23,3 +23,4 @@ api/
 - 业务逻辑优先放在 `app/agents/`、`app/memory/`、`app/skills/` 或 `app/core/`。
 - `chat.py` 在准备 Serana runtime 时会分别传递动态记忆与当前会话最近历史；不要在 API 层自行解释短跟进或拼接用户意图。
 - 修改 API 契约时，同步检查 Android data models、ViewModel 和对应 README。
+- 后端不再提供默认 LLM；聊天、目标等需要模型的接口必须先由前端保存用户 LLM 配置。

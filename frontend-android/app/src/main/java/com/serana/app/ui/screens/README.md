@@ -11,7 +11,7 @@
 - `SkillsScreen.kt`
   - 技能列表、SkillHub 市场、本地 ZIP 导入、生命周期状态、更新、范围切换和卸载入口。
 - `SettingsScreen.kt`
-  - 默认配置与个人配置切换，以及 Base URL、API Key、模型三项个性化设置。
+  - 服务器连接与 LLM 配置切换；服务器地址本地保存，Base URL、API Key、模型三项保存到当前服务器。
 
 ## 聊天页维护约定
 

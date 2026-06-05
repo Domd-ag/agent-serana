@@ -9,12 +9,12 @@ data class LlmConfig(
 )
 
 enum class LlmMode(val wireValue: String) {
-    USER_CONFIG("USER_CONFIG"),
-    BACKEND_DEFAULT("BACKEND_DEFAULT");
+    SERVER_CONNECTION("SERVER_CONNECTION"),
+    LLM_CONFIG("LLM_CONFIG");
 
     companion object {
         fun fromWireValue(value: String): LlmMode {
-            return entries.firstOrNull { it.wireValue == value } ?: BACKEND_DEFAULT
+            return entries.firstOrNull { it.wireValue == value } ?: SERVER_CONNECTION
         }
     }
 }

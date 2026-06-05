@@ -43,7 +43,7 @@ async def get_user_llm_mode(
     mode = result.scalar_one_or_none()
     
     if not mode:
-        mode = UserLLMMode(user_id=user.id, mode="BACKEND_DEFAULT")
+        mode = UserLLMMode(user_id=user.id, mode="USER_CONFIG")
         db.add(mode)
         await db.commit()
         await db.refresh(mode)
@@ -55,24 +55,24 @@ async def get_current_llm_config(
     user: User = Depends(get_default_user),
     db: AsyncSession = Depends(get_db),
 ):
-    mode_result = await db.execute(
-        select(UserLLMMode).where(UserLLMMode.user_id == user.id)
+    config_result = await db.execute(
+        select(UserLLMConfig).where(UserLLMConfig.user_id == user.id)
     )
-    mode = mode_result.scalar_one_or_none()
-    
-    use_backend_default = True
-    user_config = None
-    
-    if mode and mode.mode == "USER_CONFIG":
-        config_result = await db.execute(
-            select(UserLLMConfig).where(UserLLMConfig.user_id == user.id)
+    db_config = config_result.scalar_one_or_none()
+    if not db_config:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="请先在设置中配置 LLM Base URL、API Key 和模型。",
         )
-        db_config = config_result.scalar_one_or_none()
-        if db_config:
-            user_config = create_user_llm_config_from_db(db_config)
-            use_backend_default = False
+
+    user_config = create_user_llm_config_from_db(db_config)
+    if not user_config:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="已保存的 LLM 配置不可用，请在设置中重新保存。",
+        )
     
     return {
         "user_config": user_config,
-        "use_backend_default": use_backend_default,
+        "use_backend_default": False,
     }

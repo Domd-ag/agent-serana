@@ -329,7 +329,7 @@ async def _generate_assistant_payload(
 
     return (
         "Your message has been saved, but no active LLM configuration is available yet. "
-        "Set a backend default model or save a user model in settings to enable full responses.",
+        "Save an LLM configuration in settings to enable full responses.",
         thinking_blocks,
         tool_calls,
         memory_context_included,

@@ -265,7 +265,7 @@ class UserLLMMode(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, unique=True)
-    mode = Column(String, nullable=False, default="BACKEND_DEFAULT")
+    mode = Column(String, nullable=False, default="USER_CONFIG")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="llm_mode")

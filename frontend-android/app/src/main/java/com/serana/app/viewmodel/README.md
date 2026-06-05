@@ -11,7 +11,8 @@
 - `SkillsViewModel.kt`
   - 负责技能列表刷新、远程安装审批、远程更新审批、生命周期状态加载、范围切换、本地卸载审批和 ZIP 导入。
 - `SettingsViewModel.kt`
-  - 负责默认配置与个人配置切换，以及配置项读写、加载态和错误态。
+  - 负责服务器连接与 LLM 配置切换。
+  - 服务器地址写入 Android 本地配置；LLM Base URL、API Key、模型写入当前服务器。
 
 ## 维护约定
 

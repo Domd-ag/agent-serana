@@ -974,7 +974,7 @@ private fun SettingsOverlayDialog(
 
     OverlayDialogScaffold(
         title = "设置",
-        subtitle = "模型路由与服务配置",
+        subtitle = "服务器连接与模型配置",
         onDismiss = onDismiss,
     ) {
         if (uiState.isLoading) {
@@ -999,7 +999,6 @@ private fun SettingsOverlayDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("LLM 模式", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 OverlayModeSelector(
                     mode = uiState.mode,
                     onSelect = viewModel::updateMode,
@@ -1007,24 +1006,43 @@ private fun SettingsOverlayDialog(
             }
 
             AnimatedVisibility(
-                visible = uiState.mode == LlmMode.USER_CONFIG,
+                visible = uiState.mode == LlmMode.SERVER_CONNECTION,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut(),
             ) {
                 OverlaySection(
-                    title = "个人配置",
+                    title = "连接服务器",
                     subtitle = "",
                 ) {
                     OutlinedTextField(
-                        value = uiState.model,
-                        onValueChange = viewModel::updateModel,
+                        value = uiState.serverUrl,
+                        onValueChange = viewModel::updateServerUrl,
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("模型") },
-                        isError = uiState.modelError != null,
+                        label = { Text("服务器地址") },
+                        placeholder = { Text("例如 http://192.168.31.30:8000") },
+                        isError = uiState.serverUrlError != null,
                         supportingText = {
-                            uiState.modelError?.let { Text(it) }
+                            Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
                         },
                     )
+                    Button(
+                        onClick = { viewModel.saveSettings() },
+                        enabled = !uiState.isSaving,
+                    ) {
+                        Text(if (uiState.isSaving) "保存中…" else "保存服务器")
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = uiState.mode == LlmMode.LLM_CONFIG,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut(),
+            ) {
+                OverlaySection(
+                    title = "LLM 配置",
+                    subtitle = "",
+                ) {
                     OutlinedTextField(
                         value = uiState.baseUrl,
                         onValueChange = viewModel::updateBaseUrl,
@@ -1052,6 +1070,16 @@ private fun SettingsOverlayDialog(
                         },
                         supportingText = {
                             uiState.apiKeyError?.let { Text(it) }
+                        },
+                    )
+                    OutlinedTextField(
+                        value = uiState.model,
+                        onValueChange = viewModel::updateModel,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("模型") },
+                        isError = uiState.modelError != null,
+                        supportingText = {
+                            uiState.modelError?.let { Text(it) }
                         },
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1178,11 +1206,11 @@ private fun OverlayModeSelector(
     mode: LlmMode,
     onSelect: (LlmMode) -> Unit,
 ) {
-    val isUserConfig = mode == LlmMode.USER_CONFIG
-    val description = if (isUserConfig) {
-        "使用你自己的模型、Base URL 和 API Key。"
+    val isLlmConfig = mode == LlmMode.LLM_CONFIG
+    val description = if (isLlmConfig) {
+        "在当前服务器上保存 Base URL、API Key 和模型。"
     } else {
-        "使用后端统一维护的默认模型配置，适合直接开始对话。"
+        "配置手机 App 要连接的 Serana 后端地址。"
     }
 
     Column(
@@ -1196,7 +1224,7 @@ private fun OverlayModeSelector(
         ) {
             val segmentWidth = maxWidth / 2
             val indicatorOffset by animateDpAsState(
-                targetValue = if (isUserConfig) segmentWidth else 0.dp,
+                targetValue = if (isLlmConfig) segmentWidth else 0.dp,
                 label = "mode_selector_offset",
             )
 
@@ -1222,13 +1250,13 @@ private fun OverlayModeSelector(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clickable { onSelect(LlmMode.BACKEND_DEFAULT) },
+                                .clickable { onSelect(LlmMode.SERVER_CONNECTION) },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "默认",
+                                text = "连接服务器",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isUserConfig) MaterialTheme.colorScheme.onSurface else Color.White,
+                                color = if (isLlmConfig) MaterialTheme.colorScheme.onSurface else Color.White,
                                 fontWeight = FontWeight.Medium,
                             )
                         }
@@ -1236,13 +1264,13 @@ private fun OverlayModeSelector(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clickable { onSelect(LlmMode.USER_CONFIG) },
+                                .clickable { onSelect(LlmMode.LLM_CONFIG) },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "个人配置",
+                                text = "LLM 配置",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isUserConfig) Color.White else MaterialTheme.colorScheme.onSurface,
+                                color = if (isLlmConfig) Color.White else MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Medium,
                             )
                         }

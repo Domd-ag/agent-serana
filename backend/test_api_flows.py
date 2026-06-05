@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import zipfile
 
 import httpx
+from sqlalchemy import select
 
 from app.approvals import get_approval_manager, get_policy_gate
 from app.agents.base import AgentManager
@@ -34,6 +35,8 @@ from app.agents.serana.nodes import (
 from app.api.skills import get_marketplace_client
 from app.core.database import AsyncSessionLocal
 from app.core.init_db import create_default_user, init_db
+from app.core.models import UserLLMConfig
+from app.core.security import encrypt_data
 from app.main import app
 from app.memory import MemoryInjector, MemoryService, ProfileFactsManager, ResidentMemoryManager, WorkingMemoryManager
 from app.skills import SkillManager
@@ -1363,6 +1366,26 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         async with AsyncSessionLocal() as session:
             user = await create_default_user(session)
             self.default_user_id = str(user.id)
+            config_result = await session.execute(
+                select(UserLLMConfig).where(UserLLMConfig.user_id == user.id)
+            )
+            llm_config = config_result.scalar_one_or_none()
+            if llm_config:
+                llm_config.provider = "openai"
+                llm_config.encrypted_api_key = encrypt_data("test-key")
+                llm_config.base_url = "https://example.test/v1"
+                llm_config.model = "test-model"
+            else:
+                session.add(
+                    UserLLMConfig(
+                        user_id=user.id,
+                        provider="openai",
+                        encrypted_api_key=encrypt_data("test-key"),
+                        base_url="https://example.test/v1",
+                        model="test-model",
+                    )
+                )
+            await session.commit()
         self.transport = httpx.ASGITransport(app=app)
         self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test")
 
@@ -1423,6 +1446,18 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
             timeline["insights"]["loop_stages"],
             ["lightweight_complete", "lightweight_start"],
         )
+
+    async def test_chat_requires_saved_llm_config(self):
+        delete_response = await self.client.delete("/api/v1/llm/config")
+        self.assertEqual(delete_response.status_code, 200)
+
+        response = await self.client.post(
+            "/api/v1/chat/message",
+            json={"content": "Quick question: what should I study tonight?", "stream": False},
+        )
+
+        self.assertEqual(response.status_code, 428)
+        self.assertIn("配置 LLM", response.json()["detail"])
 
     @patch("app.api.chat.get_llm_gateway", return_value=FakeGateway())
     async def test_chat_stream_uses_lightweight_route_for_simple_requests(self, _gateway):

@@ -112,6 +112,12 @@ async def update_llm_mode(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_default_user),
 ):
+    if mode_update.mode == LLMMode.BACKEND_DEFAULT:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="旧配置路径已移除，请使用前端保存的 LLM 配置。",
+        )
+
     mode_result = await db.execute(
         select(UserLLMMode).where(UserLLMMode.user_id == user.id)
     )
@@ -144,8 +150,13 @@ async def get_llm_mode(
     mode = mode_result.scalar_one_or_none()
     
     if not mode:
-        mode = UserLLMMode(user_id=user.id, mode="BACKEND_DEFAULT")
+        mode = UserLLMMode(user_id=user.id, mode="USER_CONFIG")
         db.add(mode)
+        await db.commit()
+        await db.refresh(mode)
+    elif mode.mode == "BACKEND_DEFAULT":
+        mode.mode = "USER_CONFIG"
+        mode.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(mode)
     
