@@ -281,6 +281,8 @@ curl -fL --connect-timeout 15 --max-time 60 \
 bash -x /tmp/deploy-linux.sh
 ```
 
+部署脚本会覆盖 `/opt/serana` 代码目录。新版脚本会自动切到 `/` 后再执行覆盖操作；如果手动拆开执行命令，也不要站在 `/opt/serana` 或它的子目录里删除/覆盖代码目录。
+
 如果 `raw.githubusercontent.com` 或 `github.com` 在服务器上都不稳定，需要给服务器配置代理后再执行：
 
 ```bash

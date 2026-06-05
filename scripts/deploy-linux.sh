@@ -284,6 +284,7 @@ print_summary() {
 
 main() {
   need_root
+  cd /
   install_packages
   ensure_user
   sync_source
