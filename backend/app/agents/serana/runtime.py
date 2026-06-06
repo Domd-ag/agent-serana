@@ -75,6 +75,7 @@ def _build_memory_trace(
                 id="resident-memory-context",
                 title="Resident Memory",
                 content="Loaded stable long-term preferences and standing user context.",
+                timestamp=timestamp,
                 is_expanded=False,
             )
         )
@@ -84,6 +85,7 @@ def _build_memory_trace(
                 id="working-memory-context",
                 title="Working Memory",
                 content="Loaded temporary notes and task context for the current conversation.",
+                timestamp=timestamp,
                 is_expanded=False,
             )
         )
@@ -93,6 +95,7 @@ def _build_memory_trace(
                 id="memory-context",
                 title="Memory",
                 content="Loaded related profile facts and conversation history.",
+                timestamp=timestamp,
                 is_expanded=False,
             )
         )

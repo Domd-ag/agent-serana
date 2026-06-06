@@ -30,6 +30,7 @@ data class ThinkingBlock(
     val id: String,
     val title: String,
     val content: String,
+    val timestamp: String = "",
 )
 
 data class ToolTrace(

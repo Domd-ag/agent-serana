@@ -29,6 +29,7 @@
 
 - `RetrofitClient.streamChatMessage` 使用专用 OkHttp client，SSE 读取不设置 30 秒 `readTimeout`，用来承载 HTML 演示生成、浏览器观察、审批等待等长任务。
 - 当前支持的事件包括 `thinking`、`thinking_block`、`content`、`approval_requested`、`approval_resolved`、`tool_call`、`error`、`done`。
+- `thinking_block` 必须保留后端返回的 `timestamp`，聊天页会用它和工具步骤时间计算 `Thought for Ns`。
 - `tool_call` 会在后端工具完成时即时到达，ViewModel 可以先把浏览器打开、观察、点击等步骤显示到当前消息里。
 - `done` 事件仍会携带最终 `thinking_blocks` 和 `tool_calls`，ViewModel 需要按 id 去重合并，再用 debug 接口校准落库后的最终消息。
 - audit insights 包含 `planning_stages`、`tool_result_names`、`tool_result_statuses`、`tool_result_schema_versions` 和 `artifact_kinds`，用于调试统一工具结果协议。

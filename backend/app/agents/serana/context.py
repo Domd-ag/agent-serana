@@ -624,11 +624,6 @@ def ensure_instruction_skill_context(state: dict[str, Any]) -> dict[str, Any]:
         "instruction_skill_names": skill_names,
         "instruction_skill_context": "\n\n".join(sections),
     }
-    next_state = add_thinking_block(
-        next_state,
-        "技能",
-        f"已加载 {len(skill_names)} 个导入技能提示：{', '.join(skill_names)}",
-    )
     next_state = add_tool_call(
         next_state,
         "instruction_skill_context",

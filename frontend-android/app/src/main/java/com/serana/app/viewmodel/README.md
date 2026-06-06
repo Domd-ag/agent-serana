@@ -20,4 +20,5 @@
 - 审批两步流在这里闭环：先提交审批，再继续原动作。
 - 如果后端新增技能动作状态，优先先补这里的状态机，再改页面展示。
 - 流式聊天的 `tool_call` 和 `done.tool_calls` 必须按 `id` 去重，避免同一个步骤在 UI 里重复出现。
+- `thinking_block` 映射时必须保留 `timestamp`，否则聊天页执行摘要会退化成固定 `Thought for 0s`。
 - 新增后端 SSE 事件时，同步检查 `RetrofitClient`、`ChatViewModel` 和聊天页执行摘要展示。

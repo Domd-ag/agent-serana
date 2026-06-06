@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -120,6 +120,7 @@ class ThinkingBlock(BaseModel):
     id: str
     title: str
     content: str
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     is_expanded: bool = False
 
 

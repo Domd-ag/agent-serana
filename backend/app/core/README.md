@@ -28,7 +28,7 @@ core/
   - 集中读取 `backend/.env`。
   - 包含应用版本、日志级别、CORS、数据库、服务端口和 SkillHub 配置；不再保存默认 LLM 配置。
 - `schemas.py`
-  - 定义聊天、审批、技能、记忆等接口的共享模型。
+  - 定义聊天、审批、技能、记忆等接口的共享模型；`ThinkingBlock` 需要保留 `timestamp`，供前端展示执行耗时。
 - `artifacts.py`
   - 统一截图、HTML 预览、下载文件等 artifact 结构。
 - `tool_results.py`

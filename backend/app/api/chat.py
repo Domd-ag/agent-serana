@@ -238,6 +238,7 @@ async def _generate_assistant_payload(
                 id=str(block.get("id") or f"serana-thinking-{index}"),
                 title=str(block.get("title") or "Thinking"),
                 content=str(block.get("content") or ""),
+                timestamp=str(block.get("timestamp") or datetime.now(timezone.utc).isoformat()),
                 is_expanded=False,
             )
             for index, block in enumerate(serana_result.get("thinking_blocks", []))

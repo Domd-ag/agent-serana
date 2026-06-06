@@ -666,6 +666,7 @@ private fun mapThinkingBlock(dto: ThinkingBlockDto): ThinkingBlock {
         id = dto.id,
         title = dto.title,
         content = dto.content,
+        timestamp = dto.timestamp,
     )
 }
 

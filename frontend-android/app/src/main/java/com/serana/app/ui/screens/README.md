@@ -23,6 +23,7 @@
 - `html_preview` 类型产物在聊天页内以“打开演示”卡片触发浮层 `WebView` 预览，不走外部下载。
 - 顶部 Serana 胶囊在等待回复、thinking、streaming 或重试期间，会在名称后显示轻量旋转等待图标。
 - 工具执行摘要优先读取后端统一的 `output.tool_result.user_summary`，旧字段只作为兼容兜底。
+- 执行摘要只展示用户能理解的路线：浏览器、天气、计算、时间、HTML 演示等；`Reply`、技能提示加载、memory 和内部 route/planning trace 要过滤掉。
 
 ## 正文排版
 

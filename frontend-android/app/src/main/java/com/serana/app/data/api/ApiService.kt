@@ -163,6 +163,7 @@ data class ThinkingBlockDto(
     val id: String,
     val title: String,
     val content: String,
+    val timestamp: String = "",
     @SerializedName("is_expanded")
     val isExpanded: Boolean = false,
 )

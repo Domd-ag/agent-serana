@@ -23,5 +23,6 @@ api/
 - 业务逻辑优先放在 `app/agents/`、`app/memory/`、`app/skills/` 或 `app/core/`。
 - `chat.py` 在准备 Serana runtime 时会分别传递动态记忆与当前会话最近历史；不要在 API 层自行解释短跟进或拼接用户意图。
 - `ChatMessageResponse.timestamp` 必须返回带时区的 ISO 时间；数据库里无时区的 `created_at` 按 UTC 补齐后再返回，前端再转换到手机本地时区显示。
+- `thinking_blocks` 同样要保留每个 block 的 `timestamp`，用于 Android 端计算用户可见的执行耗时。
 - 修改 API 契约时，同步检查 Android data models、ViewModel 和对应 README。
 - 后端不再提供默认 LLM；聊天、目标等需要模型的接口必须先由前端保存用户 LLM 配置。

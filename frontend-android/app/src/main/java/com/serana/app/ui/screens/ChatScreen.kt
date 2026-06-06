@@ -1999,6 +1999,7 @@ private fun MessageBubble(
                     ExecutionSummary(
                         steps = executionSteps,
                         activeStreaming = activeStreaming,
+                        messageTimestamp = message.timestamp,
                     )
                 }
                 if (message.content.isNotBlank()) {
@@ -2142,11 +2143,14 @@ private data class ExecutionStep(
 private fun ExecutionSummary(
     steps: List<ExecutionStep>,
     activeStreaming: Boolean,
+    messageTimestamp: String,
 ) {
     var expanded by rememberSaveable(steps.joinToString("|") { "${it.label}:${it.status}" }) {
         mutableStateOf(steps.any { it.label.startsWith("Browser ") })
     }
-    val thoughtSeconds = remember(steps, activeStreaming) { executionDurationSeconds(steps, activeStreaming) }
+    val thoughtSeconds = remember(steps, activeStreaming, messageTimestamp) {
+        executionDurationSeconds(steps, activeStreaming, messageTimestamp)
+    }
     val title = if (activeStreaming) {
         "Thinking"
     } else {
@@ -2349,6 +2353,7 @@ private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
             } else {
                 ExecutionStepStatus.DONE
             },
+            timestamp = block.timestamp,
         )
     }
     message.toolCalls
@@ -2384,6 +2389,8 @@ private fun buildExecutionSteps(message: Message): List<ExecutionStep> {
 private fun shouldShowThinkingBlock(block: ThinkingBlock): Boolean {
     val title = block.title.lowercase()
     val content = block.content.lowercase()
+    if (title in setOf("reply", "fallback")) return false
+    if (title == "技能" && ("已加载" in content || "导入技能提示" in content)) return false
     val internalSignals = listOf(
         "resident memory",
         "memory",
@@ -2392,6 +2399,8 @@ private fun shouldShowThinkingBlock(block: ThinkingBlock): Boolean {
         "loaded related profile",
         "llm gateway",
         "runtime",
+        "the user is",
+        "handled this request directly",
     )
     return internalSignals.none { signal -> signal in title || signal in content }
 }
@@ -2505,9 +2514,15 @@ private fun toolDetail(trace: ToolTrace): String {
         .take(900)
 }
 
-private fun executionDurationSeconds(steps: List<ExecutionStep>, activeStreaming: Boolean): Long {
+private fun executionDurationSeconds(
+    steps: List<ExecutionStep>,
+    activeStreaming: Boolean,
+    messageTimestamp: String,
+): Long {
     if (activeStreaming) return 0
-    val times = steps.mapNotNull { parseEpochSecond(it.timestamp) }
+    val times = (steps.map { it.timestamp } + messageTimestamp)
+        .mapNotNull(::parseEpochSecond)
+        .distinct()
     if (times.size < 2) return 0
     return Duration.between(
         java.time.Instant.ofEpochSecond(times.first()),
