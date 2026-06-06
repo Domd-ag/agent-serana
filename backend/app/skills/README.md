@@ -44,9 +44,10 @@ skills/
   安装后不会直接执行，而是把 `SKILL.md` 作为行为和领域指导注入到 Serana 上下文。
   对话时会优先挑选和当前问题相关的 instruction skill，再生成 direct reply 或辅助 planning。
   SkillHub 包内即使附带 `.sh` 等脚本，只要清单仍是 `runtime=instruction` 且 `tools=[]`，后端就不会把脚本当作已注册工具自动执行；这样可以避免未声明参数、运行环境和权限的市场脚本绕过统一工具协议与审批门禁。
+  如果 `SKILL.md` 同时引用多个 `.sh`，且包内没有显式 `runtime=script` 清单，安装器会按 instruction skill 保留它，而不是猜测脚本入口。
 - `runtime=script`：
   Python 包由 `PythonScriptAdapter` 执行技能目录内声明的 `.py` 入口。
-  安全且入口明确的 SkillHub `.sh` 包会在安装时由 `SkillStandardizer` 自动转换，并通过 `ShellScriptAdapter` 执行。
+  入口明确的 SkillHub `.sh` 包会在安装时由 `SkillStandardizer` 自动转换，并通过 `ShellScriptAdapter` 执行。
   Python adapter 使用 JSON stdin/stdout 协议；Shell adapter 按 `argument_order` 传递位置参数，并把文本或 JSON stdout 统一包装为工具结果。
   安装后会注册为普通 `skill_name.tool_name` 工具；相关可执行 Skill 会在 Browser 兜底之前参与选择，失败后才继续走 Browser。
 - `capabilities` / `intents`：

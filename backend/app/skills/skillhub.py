@@ -318,6 +318,52 @@ class SkillHubClient:
             add_capability("memory", "summary", "记忆", "总结")
             add_intent("记住", "回忆", "总结对话")
 
+        if any(
+            token in source_text
+            for token in (
+                "self-improv",
+                "self_improv",
+                "continuous improvement",
+                "learning",
+                "learnings",
+                "correction",
+                "feedback",
+                "error recovery",
+                "lesson",
+                "lessons",
+                "经验",
+                "教训",
+                "纠正",
+                "错误",
+                "复盘",
+                "改进",
+                "反馈",
+                "持续改进",
+                "能力缺口",
+            )
+        ):
+            add_capability(
+                "self_improvement",
+                "reflection",
+                "error_recovery",
+                "correction",
+                "feedback",
+                "learning",
+                "复盘",
+                "纠错",
+                "持续改进",
+            )
+            add_intent(
+                "纠正回答",
+                "总结经验",
+                "复盘错误",
+                "记录教训",
+                "吸收反馈",
+                "持续改进",
+                "避免下次再错",
+                "刚才答错了",
+            )
+
         if any(token in source_text for token in ("browser", "网页", "web", "搜索", "search", "crawl", "scrape")):
             add_capability("browser", "web_search", "网页", "搜索")
             add_intent("上网搜索", "打开网页", "查网页")

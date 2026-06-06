@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -47,6 +49,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -85,9 +88,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -120,9 +125,13 @@ import com.serana.app.data.models.ToolTrace
 import com.serana.app.viewmodel.ChatViewModel
 import com.serana.app.viewmodel.SettingsViewModel
 import com.serana.app.viewmodel.SkillsViewModel
+import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.Duration
 import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
@@ -149,6 +158,8 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
     val bottomAnchorIndex = 1 + (if (error != null) 1 else 0) + messages.size + (if (isLoading) 1 else 0)
     val latestMessage = messages.lastOrNull()
     val isAssistantBusy = isLoading || messages.any {
@@ -160,8 +171,25 @@ fun ChatScreen(
         )
     }
     var lastAutoScrollSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var autoFollowLatest by rememberSaveable { mutableStateOf(true) }
     val shouldAutoFollowLatest by remember(messageListState, bottomAnchorIndex) {
         derivedStateOf { isNearBottom(messageListState, bottomAnchorIndex) }
+    }
+
+    LaunchedEffect(messageListState, bottomAnchorIndex) {
+        snapshotFlow { messageListState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) {
+                autoFollowLatest = isNearBottom(messageListState, bottomAnchorIndex)
+            }
+        }
+    }
+
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && bottomAnchorIndex >= 0) {
+            autoFollowLatest = true
+            delay(80)
+            messageListState.animateScrollToItem(bottomAnchorIndex)
+        }
     }
 
     LaunchedEffect(
@@ -175,9 +203,11 @@ fun ChatScreen(
         val sessionChanged = currentSessionId != lastAutoScrollSessionId
         if (sessionChanged) {
             lastAutoScrollSessionId = currentSessionId
+            autoFollowLatest = true
         }
 
-        if (bottomAnchorIndex >= 0 && (sessionChanged || shouldAutoFollowLatest)) {
+        if (bottomAnchorIndex >= 0 && (sessionChanged || autoFollowLatest || shouldAutoFollowLatest)) {
+            delay(16)
             messageListState.scrollToItem(bottomAnchorIndex)
         }
     }
@@ -309,8 +339,16 @@ fun ChatScreen(
                         inputText = inputText,
                         onTextChange = { inputText = it },
                         onSend = {
+                            autoFollowLatest = true
                             viewModel.sendMessage(inputText)
                             inputText = ""
+                        },
+                        onFocus = {
+                            autoFollowLatest = true
+                            scope.launch {
+                                delay(80)
+                                messageListState.animateScrollToItem(bottomAnchorIndex)
+                            }
                         },
                         isLoading = isLoading,
                     )
@@ -762,6 +800,33 @@ private fun isNearBottom(
     if (bottomAnchorIndex <= 0) return true
     val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return true
     return lastVisibleIndex >= (bottomAnchorIndex - threshold).coerceAtLeast(0)
+}
+
+private val MessageTimestampFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+private fun formatMessageTimestamp(timestamp: String): String {
+    val normalized = timestamp.trim().replace(" ", "T")
+    if (normalized.isBlank()) return ""
+
+    runCatching {
+        return OffsetDateTime.parse(normalized)
+            .atZoneSameInstant(ZoneId.systemDefault())
+            .format(MessageTimestampFormatter)
+    }
+
+    runCatching {
+        return Instant.parse(normalized)
+            .atZone(ZoneId.systemDefault())
+            .format(MessageTimestampFormatter)
+    }
+
+    runCatching {
+        return LocalDateTime.parse(normalized)
+            .format(MessageTimestampFormatter)
+    }
+
+    return timestamp.take(19).replace("T", " ")
 }
 
 @Composable
@@ -1941,7 +2006,7 @@ private fun MessageBubble(
                 }
                 if (message.timestamp.isNotBlank()) {
                     Text(
-                        text = message.timestamp.take(19).replace("T", " "),
+                        text = formatMessageTimestamp(message.timestamp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.56f),
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -2039,7 +2104,7 @@ private fun MessageContentColumn(
         }
         if (message.timestamp.isNotBlank()) {
             Text(
-                text = message.timestamp.take(19).replace("T", " "),
+                text = formatMessageTimestamp(message.timestamp),
                 color = textColor.copy(alpha = 0.56f),
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -3152,6 +3217,7 @@ private fun MessageInput(
     inputText: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onFocus: () -> Unit,
     isLoading: Boolean,
 ) {
     val isDarkTheme = isSystemInDarkTheme()
@@ -3179,7 +3245,13 @@ private fun MessageInput(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            onFocus()
+                        }
+                    },
                 placeholder = {
                     Text(
                         "告诉 Serana 你想做什么…",

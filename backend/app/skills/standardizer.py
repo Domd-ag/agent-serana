@@ -110,13 +110,16 @@ class SkillStandardizer:
                 referenced_paths.append(candidate)
         unique_references = list(dict.fromkeys(referenced_paths))
         if len(unique_references) > 1:
-            raise SkillStandardizationError("SKILL.md 引用了多个 Shell 入口，无法自动判断应该注册哪一个。")
+            # Multiple shell references are often optional hooks or helpers.
+            # Without an explicit executable manifest, keep the package as an
+            # instruction skill instead of guessing which script to register.
+            return None
         if unique_references:
             return unique_references[0]
 
         shell_files = sorted(path.resolve() for path in skill_dir.rglob("*.sh") if path.is_file())
         if len(shell_files) > 1:
-            raise SkillStandardizationError("技能包包含多个 Shell 脚本，但没有在 SKILL.md 中声明唯一入口。")
+            return None
         return shell_files[0] if shell_files else None
 
     @staticmethod

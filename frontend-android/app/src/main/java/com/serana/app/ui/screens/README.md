@@ -17,7 +17,8 @@
 
 - 业务状态和网络调用放到 ViewModel，不要堆在 `Composable` 里。
 - 键盘避让依赖 `MainActivity` 的 edge-to-edge inset 分发，以及消息区容器的 `imePadding()`；顶部悬浮栏不要跟着键盘移动。
-- 流式输出时，只有用户原本就在底部附近才自动跟随到最新消息；手动翻历史时不要抢滚动位置。
+- 输入框聚焦、键盘展开和用户发送消息时会把消息区轻推到最新位置；流式输出时，只有用户原本就在底部附近或刚发送消息后才自动跟随，手动翻历史时不要抢滚动位置。
+- 消息时间统一通过 `formatMessageTimestamp()` 解析服务端 ISO 时间，并转换为手机本地时区显示。
 - `html_preview` 类型产物在聊天页内以“打开演示”卡片触发浮层 `WebView` 预览，不走外部下载。
 - 顶部 Serana 胶囊在等待回复、thinking、streaming 或重试期间，会在名称后显示轻量旋转等待图标。
 - 工具执行摘要优先读取后端统一的 `output.tool_result.user_summary`，旧字段只作为兼容兜底。
