@@ -964,6 +964,103 @@ def _resolve_weather_tool(user_input: str) -> tuple[str, dict[str, Any]] | None:
     return "get_current_weather", {"location": location, "units": "metric"}
 
 
+def _is_weather_skill_candidate(skill: Any, tool: Any) -> bool:
+    domain_text = " ".join(
+        [
+            str(getattr(skill, "name", "") or ""),
+            str(getattr(skill, "description", "") or ""),
+            str(getattr(getattr(skill, "manifest", None), "registry_slug", "") or ""),
+            " ".join(getattr(getattr(skill, "manifest", None), "capabilities", []) or []),
+            " ".join(getattr(getattr(skill, "manifest", None), "intents", []) or []),
+            str(getattr(tool, "name", "") or ""),
+            str(getattr(tool, "description", "") or ""),
+        ]
+    ).lower()
+    return any(token in domain_text for token in ("weather", "forecast", "天气", "预报", "气温", "温度"))
+
+
+def _build_weather_skill_arguments(tool: Any, user_input: str) -> dict[str, Any] | None:
+    location_info = _extract_weather_location_for_shortcut(user_input)
+    if location_info is None:
+        return None
+
+    query_location, display_location = location_info
+    location = display_location or query_location
+    if not location:
+        return None
+
+    mode, days, _target_index = _weather_request_window(user_input)
+    schema = getattr(tool, "input_schema", None)
+    properties = dict(getattr(schema, "properties", {}) or {})
+    required = list(getattr(schema, "required", []) or [])
+    args: dict[str, Any] = {}
+
+    for key in ("city", "location", "query", "q"):
+        if key in properties or key in required:
+            args[key] = location
+            break
+
+    if not args:
+        string_keys = [
+            key
+            for key, spec in properties.items()
+            if str((spec or {}).get("type") or "").lower() in {"", "string"}
+        ]
+        if len(required) == 1 and required[0] in properties:
+            args[str(required[0])] = location
+        elif len(string_keys) == 1:
+            args[str(string_keys[0])] = location
+        elif not properties:
+            args["query"] = location
+        else:
+            return None
+
+    if "days" in properties:
+        args["days"] = max(days, 1)
+    if "units" in properties:
+        args["units"] = "metric"
+    if "type" in properties and mode:
+        args["type"] = mode
+    return args
+
+
+def _resolve_installed_weather_skill_intent(
+    user_input: str,
+    *,
+    source: str,
+) -> dict[str, Any] | None:
+    if _is_explicit_web_search_request(user_input) or not _is_weather_question(user_input):
+        return None
+
+    skill_manager = SkillManager()
+    skill_manager.ensure_initialized()
+    for skill in skill_manager.list_skills():
+        if not skill.is_enabled or skill.runtime == "instruction" or not skill.manifest.tools:
+            continue
+        if skill.name == "browser" or skill.agent_type not in {"all", "serana"}:
+            continue
+
+        for tool_def in skill.manifest.tools:
+            if not _is_weather_skill_candidate(skill, tool_def):
+                continue
+            tool_args = _build_weather_skill_arguments(tool_def, user_input)
+            if tool_args is None:
+                continue
+            tool = skill_manager.get_tool_function(skill.name, tool_def.name)
+            if tool is None:
+                continue
+            return {
+                "full_name": f"{skill.name}.{tool_def.name}",
+                "skill_name": skill.name,
+                "tool_name": tool_def.name,
+                "arguments": tool_args,
+                "callable": tool,
+                "source": source,
+            }
+
+    return None
+
+
 _WTTR_LOCATION_ALIASES: dict[str, tuple[str, str]] = {
     "香港": ("Hong Kong", "香港"),
     "港岛": ("Hong Kong", "香港"),
@@ -2518,6 +2615,10 @@ def _resolve_local_fallback_tool_intent(
     skill_manager = SkillManager()
     skill_manager.ensure_initialized()
 
+    installed_weather_skill = _resolve_installed_weather_skill_intent(user_input, source="local_weather_skill_fallback")
+    if installed_weather_skill is not None:
+        return installed_weather_skill
+
     weather_tool = _resolve_weather_tool(user_input)
     if weather_tool:
         tool_name, tool_input = weather_tool
@@ -2582,6 +2683,10 @@ def _resolve_local_fallback_tool_intent(
 def _resolve_weather_tool_intent(user_input: str) -> dict[str, Any] | None:
     if _is_explicit_web_search_request(user_input):
         return None
+
+    installed_weather_skill = _resolve_installed_weather_skill_intent(user_input, source="weather_skill_override")
+    if installed_weather_skill is not None:
+        return installed_weather_skill
 
     weather_tool = _resolve_weather_tool(user_input)
     if not weather_tool:

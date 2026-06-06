@@ -110,6 +110,7 @@ serana/
 - 第一优先级：本地可执行 skill
   `runtime=python` 或受控 `runtime=script` 且声明了 `tools` 的 skill，会作为真实工具参与 direct tool route，由统一 executor 执行。
   Serana 会先按能力标签、意图、工具描述筛选相关可执行 Skill，再让 LLM 在候选工具中选择并生成 schema 参数；这一步位于 Browser 快捷兜底之前。
+  天气请求会先确定性匹配已安装的可执行天气 skill，包括 SkillHub 下载的 `weather-cn-pro` 一类脚本技能；只有未命中时才进入 browser / wttr 兜底。
   明确算术表达式会先尝试 `calculator` skill；如果当前设备没有安装 calculator，Serana 会使用内置确定性算术兜底，并仍按统一 `tool_result` 协议记录结果。
 - 第二优先级：相关 instruction skill
   `runtime=instruction` 的 skill 不直接执行，但会按当前问题挑选相关 skill，把 `SKILL.md` 作为回答和规划指导。

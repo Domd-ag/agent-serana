@@ -155,10 +155,18 @@ def _serialize_message(message: Message) -> ChatMessageResponse:
         id=message.id,
         role=message.role,
         content=message.content,
-        timestamp=message.created_at.isoformat() if message.created_at else "",
+        timestamp=_serialize_message_timestamp(message.created_at),
         thinking_blocks=thinking_blocks or None,
         tool_calls=tool_calls or None,
     )
+
+
+def _serialize_message_timestamp(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 async def _get_or_create_session(

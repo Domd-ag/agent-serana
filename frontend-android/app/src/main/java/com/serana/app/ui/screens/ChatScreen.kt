@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -187,8 +189,9 @@ fun ChatScreen(
     LaunchedEffect(imeBottom) {
         if (imeBottom > 0 && bottomAnchorIndex >= 0) {
             autoFollowLatest = true
-            delay(80)
-            messageListState.animateScrollToItem(bottomAnchorIndex)
+            messageListState.scrollToItem(bottomAnchorIndex)
+            delay(24)
+            messageListState.scrollToItem(bottomAnchorIndex)
         }
     }
 
@@ -346,8 +349,9 @@ fun ChatScreen(
                         onFocus = {
                             autoFollowLatest = true
                             scope.launch {
-                                delay(80)
-                                messageListState.animateScrollToItem(bottomAnchorIndex)
+                                messageListState.scrollToItem(bottomAnchorIndex)
+                                delay(24)
+                                messageListState.scrollToItem(bottomAnchorIndex)
                             }
                         },
                         isLoading = isLoading,
@@ -823,6 +827,8 @@ private fun formatMessageTimestamp(timestamp: String): String {
 
     runCatching {
         return LocalDateTime.parse(normalized)
+            .atZone(ZoneId.of("UTC"))
+            .withZoneSameInstant(ZoneId.systemDefault())
             .format(MessageTimestampFormatter)
     }
 
@@ -1070,95 +1076,90 @@ private fun SettingsOverlayDialog(
                 )
             }
 
-            AnimatedVisibility(
-                visible = uiState.mode == LlmMode.SERVER_CONNECTION,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut(),
-            ) {
-                OverlaySection(
-                    title = "连接服务器",
-                    subtitle = "",
-                ) {
-                    OutlinedTextField(
-                        value = uiState.serverUrl,
-                        onValueChange = viewModel::updateServerUrl,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("服务器地址") },
-                        placeholder = { Text("例如 http://192.168.31.30:8000") },
-                        isError = uiState.serverUrlError != null,
-                        supportingText = {
-                            Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
-                        },
-                    )
-                    Button(
-                        onClick = { viewModel.saveSettings() },
-                        enabled = !uiState.isSaving,
+            Crossfade(
+                targetState = uiState.mode,
+                label = "settings_mode_content",
+            ) { selectedMode ->
+                if (selectedMode == LlmMode.SERVER_CONNECTION) {
+                    OverlaySection(
+                        title = "连接服务器",
+                        subtitle = "",
                     ) {
-                        Text(if (uiState.isSaving) "保存中…" else "保存服务器")
-                    }
-                }
-            }
-
-            AnimatedVisibility(
-                visible = uiState.mode == LlmMode.LLM_CONFIG,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut(),
-            ) {
-                OverlaySection(
-                    title = "LLM 配置",
-                    subtitle = "",
-                ) {
-                    OutlinedTextField(
-                        value = uiState.baseUrl,
-                        onValueChange = viewModel::updateBaseUrl,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Base URL") },
-                        isError = uiState.baseUrlError != null,
-                        supportingText = {
-                            uiState.baseUrlError?.let { Text(it) }
-                        },
-                    )
-                    OutlinedTextField(
-                        value = uiState.apiKey,
-                        onValueChange = viewModel::updateApiKey,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("API Key") },
-                        isError = uiState.apiKeyError != null,
-                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { showApiKey = !showApiKey }) {
-                                Icon(
-                                    imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (showApiKey) "隐藏 API Key" else "显示 API Key",
-                                )
-                            }
-                        },
-                        supportingText = {
-                            uiState.apiKeyError?.let { Text(it) }
-                        },
-                    )
-                    OutlinedTextField(
-                        value = uiState.model,
-                        onValueChange = viewModel::updateModel,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("模型") },
-                        isError = uiState.modelError != null,
-                        supportingText = {
-                            uiState.modelError?.let { Text(it) }
-                        },
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = uiState.serverUrl,
+                            onValueChange = viewModel::updateServerUrl,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("服务器地址") },
+                            placeholder = { Text("例如 http://192.168.31.30:8000") },
+                            isError = uiState.serverUrlError != null,
+                            supportingText = {
+                                Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
+                            },
+                        )
                         Button(
                             onClick = { viewModel.saveSettings() },
                             enabled = !uiState.isSaving,
                         ) {
-                            Text(if (uiState.isSaving) "保存中…" else "保存")
+                            Text(if (uiState.isSaving) "保存中…" else "保存服务器")
                         }
-                        TextButton(
-                            onClick = { viewModel.deleteConfig() },
-                            enabled = !uiState.isSaving && uiState.configExists,
-                        ) {
-                            Text("删除配置")
+                    }
+                } else {
+                    OverlaySection(
+                        title = "LLM 配置",
+                        subtitle = "",
+                    ) {
+                        OutlinedTextField(
+                            value = uiState.baseUrl,
+                            onValueChange = viewModel::updateBaseUrl,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Base URL") },
+                            isError = uiState.baseUrlError != null,
+                            supportingText = {
+                                uiState.baseUrlError?.let { Text(it) }
+                            },
+                        )
+                        OutlinedTextField(
+                            value = uiState.apiKey,
+                            onValueChange = viewModel::updateApiKey,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("API Key") },
+                            isError = uiState.apiKeyError != null,
+                            visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { showApiKey = !showApiKey }) {
+                                    Icon(
+                                        imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (showApiKey) "隐藏 API Key" else "显示 API Key",
+                                    )
+                                }
+                            },
+                            supportingText = {
+                                uiState.apiKeyError?.let { Text(it) }
+                            },
+                        )
+                        OutlinedTextField(
+                            value = uiState.model,
+                            onValueChange = viewModel::updateModel,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("模型") },
+                            isError = uiState.modelError != null,
+                            supportingText = {
+                                uiState.modelError?.let { Text(it) }
+                            },
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { viewModel.saveSettings() },
+                                enabled = !uiState.isSaving,
+                            ) {
+                                Text(if (uiState.isSaving) "保存中…" else "保存")
+                            }
+                            TextButton(
+                                onClick = { viewModel.deleteConfig() },
+                                enabled = !uiState.isSaving && uiState.configExists,
+                            ) {
+                                Text("删除配置")
+                            }
                         }
                     }
                 }
@@ -3221,6 +3222,7 @@ private fun MessageInput(
     isLoading: Boolean,
 ) {
     val isDarkTheme = isSystemInDarkTheme()
+    val inputInteractionSource = remember { MutableInteractionSource() }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -3247,6 +3249,10 @@ private fun MessageInput(
                 onValueChange = onTextChange,
                 modifier = Modifier
                     .weight(1f)
+                    .clickable(
+                        indication = null,
+                        interactionSource = inputInteractionSource,
+                    ) { onFocus() }
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused) {
                             onFocus()
