@@ -981,11 +981,10 @@ def _is_weather_skill_candidate(skill: Any, tool: Any) -> bool:
 
 def _build_weather_skill_arguments(tool: Any, user_input: str) -> dict[str, Any] | None:
     location_info = _extract_weather_location_for_shortcut(user_input)
-    if location_info is None:
-        return None
-
-    query_location, display_location = location_info
-    location = display_location or query_location
+    location = ""
+    if location_info is not None:
+        query_location, display_location = location_info
+        location = display_location or query_location
     if not location:
         return None
 
@@ -1028,9 +1027,16 @@ def _resolve_installed_weather_skill_intent(
     user_input: str,
     *,
     source: str,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if _is_explicit_web_search_request(user_input) or not _is_weather_question(user_input):
         return None
+
+    resolved_user_input = user_input
+    if _extract_weather_location_for_shortcut(user_input) is None and state is not None:
+        recent_location = _extract_recent_weather_location_from_context(state)
+        if recent_location:
+            resolved_user_input = f"{recent_location}{user_input}"
 
     skill_manager = SkillManager()
     skill_manager.ensure_initialized()
@@ -1043,7 +1049,7 @@ def _resolve_installed_weather_skill_intent(
         for tool_def in skill.manifest.tools:
             if not _is_weather_skill_candidate(skill, tool_def):
                 continue
-            tool_args = _build_weather_skill_arguments(tool_def, user_input)
+            tool_args = _build_weather_skill_arguments(tool_def, resolved_user_input)
             if tool_args is None:
                 continue
             tool = skill_manager.get_tool_function(skill.name, tool_def.name)
@@ -2615,7 +2621,11 @@ def _resolve_local_fallback_tool_intent(
     skill_manager = SkillManager()
     skill_manager.ensure_initialized()
 
-    installed_weather_skill = _resolve_installed_weather_skill_intent(user_input, source="local_weather_skill_fallback")
+    installed_weather_skill = _resolve_installed_weather_skill_intent(
+        user_input,
+        source="local_weather_skill_fallback",
+        state=state,
+    )
     if installed_weather_skill is not None:
         return installed_weather_skill
 
@@ -2680,11 +2690,15 @@ def _resolve_local_fallback_tool_intent(
     return None
 
 
-def _resolve_weather_tool_intent(user_input: str) -> dict[str, Any] | None:
+def _resolve_weather_tool_intent(user_input: str, state: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if _is_explicit_web_search_request(user_input):
         return None
 
-    installed_weather_skill = _resolve_installed_weather_skill_intent(user_input, source="weather_skill_override")
+    installed_weather_skill = _resolve_installed_weather_skill_intent(
+        user_input,
+        source="weather_skill_override",
+        state=state,
+    )
     if installed_weather_skill is not None:
         return installed_weather_skill
 
@@ -4510,6 +4524,28 @@ async def try_lightweight_conversation(
                 reason="Handled a complete short social message directly without structured routing.",
             )
 
+    weather_skill_intent = _resolve_installed_weather_skill_intent(
+        user_input,
+        source="weather_skill_shortcut",
+        state=state,
+    )
+    if weather_skill_intent is not None:
+        planned_state = _record_tool_selection(
+            state,
+            requested_tool_name="weather_skill_shortcut",
+            selected_tool_name=str(weather_skill_intent["full_name"]),
+            arguments=dict(weather_skill_intent["arguments"]),
+            reason="The user asked for live weather, so Serana used an installed executable weather Skill before browser fallback.",
+            status="selected",
+            detail="Installed weather Skills take priority over contextual browser weather lookups.",
+        )
+        return await _execute_resolved_direct_tool_intent(
+            planned_state,
+            llm,
+            user_input=user_input,
+            tool_intent=weather_skill_intent,
+        )
+
     contextual_web_intent = _resolve_contextual_web_followup_browser_intent(state, user_input)
     if contextual_web_intent is not None:
         planned_state = _record_tool_selection(
@@ -4696,7 +4732,7 @@ async def try_lightweight_conversation(
         route_location = route_args.get("location")
         is_weather_route = routed_tool_name.startswith("weather.") or str(route_info.get("goal_type") or "") == "weather_inquiry"
 
-        weather_override = _resolve_weather_tool_intent(user_input)
+        weather_override = _resolve_weather_tool_intent(user_input, state=planned_state)
         if weather_override is not None:
             planned_state = _record_tool_selection(
                 planned_state,
