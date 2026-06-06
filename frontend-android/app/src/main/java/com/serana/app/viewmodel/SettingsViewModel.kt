@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 data class SettingsUiState(
     val serverUrl: String = "",
@@ -70,7 +71,9 @@ class SettingsViewModel : ViewModel() {
                     return@launch
                 }
 
-                val configResponse = withContext(Dispatchers.IO) { RetrofitClient.apiService.getLlmConfig() }
+                val configResponse = withTimeout(5_000) {
+                    withContext(Dispatchers.IO) { RetrofitClient.apiService.getLlmConfig() }
+                }
                 if (!configResponse.isSuccessful) {
                     throw IllegalStateException("无法读取服务器上的 LLM 配置，请检查服务器地址。")
                 }
@@ -99,7 +102,7 @@ class SettingsViewModel : ViewModel() {
                     serverUrl = configuredServerUrl,
                     savedServerUrl = configuredServerUrl,
                     mode = LlmMode.SERVER_CONNECTION,
-                    error = e.message ?: "加载设置失败。",
+                    error = "暂时连接不上服务器，可以先修改服务器地址后保存。",
                 )
             }
         }

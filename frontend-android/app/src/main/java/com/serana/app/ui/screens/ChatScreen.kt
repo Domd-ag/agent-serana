@@ -1049,117 +1049,127 @@ private fun SettingsOverlayDialog(
         onDismiss = onDismiss,
     ) {
         if (uiState.isLoading) {
-            CircularProgressIndicator()
-        } else {
-            uiState.error?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            uiState.statusMessage?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-
-            Column(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                OverlayModeSelector(
-                    mode = uiState.mode,
-                    onSelect = viewModel::updateMode,
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Text(
+                    "正在尝试读取服务器配置，不影响修改服务器地址。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        uiState.error?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        uiState.statusMessage?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
 
-            Crossfade(
-                targetState = uiState.mode,
-                label = "settings_mode_content",
-            ) { selectedMode ->
-                if (selectedMode == LlmMode.SERVER_CONNECTION) {
-                    OverlaySection(
-                        title = "连接服务器",
-                        subtitle = "",
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OverlayModeSelector(
+                mode = uiState.mode,
+                onSelect = viewModel::updateMode,
+            )
+        }
+
+        Crossfade(
+            targetState = uiState.mode,
+            label = "settings_mode_content",
+        ) { selectedMode ->
+            if (selectedMode == LlmMode.SERVER_CONNECTION) {
+                OverlaySection(
+                    title = "连接服务器",
+                    subtitle = "",
+                ) {
+                    OutlinedTextField(
+                        value = uiState.serverUrl,
+                        onValueChange = viewModel::updateServerUrl,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("服务器地址") },
+                        placeholder = { Text("例如 http://192.168.31.30:8000") },
+                        isError = uiState.serverUrlError != null,
+                        supportingText = {
+                            Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
+                        },
+                    )
+                    Button(
+                        onClick = { viewModel.saveSettings() },
+                        enabled = !uiState.isSaving,
                     ) {
-                        OutlinedTextField(
-                            value = uiState.serverUrl,
-                            onValueChange = viewModel::updateServerUrl,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("服务器地址") },
-                            placeholder = { Text("例如 http://192.168.31.30:8000") },
-                            isError = uiState.serverUrlError != null,
-                            supportingText = {
-                                Text(uiState.serverUrlError ?: "填写 Serana 后端地址；可以填到端口，也可以填 /api/v1。")
-                            },
-                        )
+                        Text(if (uiState.isSaving) "保存中…" else "保存服务器")
+                    }
+                }
+            } else {
+                OverlaySection(
+                    title = "LLM 配置",
+                    subtitle = "",
+                ) {
+                    OutlinedTextField(
+                        value = uiState.baseUrl,
+                        onValueChange = viewModel::updateBaseUrl,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Base URL") },
+                        isError = uiState.baseUrlError != null,
+                        supportingText = {
+                            uiState.baseUrlError?.let { Text(it) }
+                        },
+                    )
+                    OutlinedTextField(
+                        value = uiState.apiKey,
+                        onValueChange = viewModel::updateApiKey,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("API Key") },
+                        isError = uiState.apiKeyError != null,
+                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showApiKey = !showApiKey }) {
+                                Icon(
+                                    imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (showApiKey) "隐藏 API Key" else "显示 API Key",
+                                )
+                            }
+                        },
+                        supportingText = {
+                            uiState.apiKeyError?.let { Text(it) }
+                        },
+                    )
+                    OutlinedTextField(
+                        value = uiState.model,
+                        onValueChange = viewModel::updateModel,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("模型") },
+                        isError = uiState.modelError != null,
+                        supportingText = {
+                            uiState.modelError?.let { Text(it) }
+                        },
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { viewModel.saveSettings() },
                             enabled = !uiState.isSaving,
                         ) {
-                            Text(if (uiState.isSaving) "保存中…" else "保存服务器")
+                            Text(if (uiState.isSaving) "保存中…" else "保存")
                         }
-                    }
-                } else {
-                    OverlaySection(
-                        title = "LLM 配置",
-                        subtitle = "",
-                    ) {
-                        OutlinedTextField(
-                            value = uiState.baseUrl,
-                            onValueChange = viewModel::updateBaseUrl,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Base URL") },
-                            isError = uiState.baseUrlError != null,
-                            supportingText = {
-                                uiState.baseUrlError?.let { Text(it) }
-                            },
-                        )
-                        OutlinedTextField(
-                            value = uiState.apiKey,
-                            onValueChange = viewModel::updateApiKey,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("API Key") },
-                            isError = uiState.apiKeyError != null,
-                            visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { showApiKey = !showApiKey }) {
-                                    Icon(
-                                        imageVector = if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = if (showApiKey) "隐藏 API Key" else "显示 API Key",
-                                    )
-                                }
-                            },
-                            supportingText = {
-                                uiState.apiKeyError?.let { Text(it) }
-                            },
-                        )
-                        OutlinedTextField(
-                            value = uiState.model,
-                            onValueChange = viewModel::updateModel,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("模型") },
-                            isError = uiState.modelError != null,
-                            supportingText = {
-                                uiState.modelError?.let { Text(it) }
-                            },
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { viewModel.saveSettings() },
-                                enabled = !uiState.isSaving,
-                            ) {
-                                Text(if (uiState.isSaving) "保存中…" else "保存")
-                            }
-                            TextButton(
-                                onClick = { viewModel.deleteConfig() },
-                                enabled = !uiState.isSaving && uiState.configExists,
-                            ) {
-                                Text("删除配置")
-                            }
+                        TextButton(
+                            onClick = { viewModel.deleteConfig() },
+                            enabled = !uiState.isSaving && uiState.configExists,
+                        ) {
+                            Text("删除配置")
                         }
                     }
                 }
