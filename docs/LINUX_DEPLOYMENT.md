@@ -285,6 +285,24 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 
 ## 常见问题
 
+### 部署速度很慢
+
+如果服务器访问 PyPI 或下载 Playwright 依赖很慢，可以临时使用国内 pip 源，并跳过 Playwright 安装。示例：
+
+```bash
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+PIP_TRUSTED_HOST=mirrors.aliyun.com \
+PIP_DEFAULT_TIMEOUT=120 \
+PIP_RETRIES=5 \
+PIP_ONLY_BINARY=:all: \
+PIP_PREFER_BINARY=1 \
+SERANA_PYTHON_BIN=/opt/miniconda3/envs/serana/bin/python \
+SERANA_INSTALL_PLAYWRIGHT=false \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh)"
+```
+
+这条命令适合已经准备好 Python/Conda 环境的服务器。`SERANA_PYTHON_BIN` 请按实际 Python 路径调整；跳过 Playwright 后，浏览器能力需要后续单独安装依赖。
+
 ### GitHub 下载卡住或 `Encountered end of file`
 
 这通常是服务器到 GitHub 的网络连接中断，不是 Serana 代码本身的问题。部署脚本现在只依赖 HTTP 下载源码包，不要求服务器安装 Git。
