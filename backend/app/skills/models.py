@@ -72,6 +72,10 @@ class SkillPackage(BaseModel):
     can_update: bool = False
     latest_version: Optional[str] = None
     update_available: bool = False
+    run_mode_description: str = ""
+    invocation_name: Optional[str] = None
+    invocation_parameters: List[Dict[str, Any]] = Field(default_factory=list)
+    invocation_examples: List[str] = Field(default_factory=list)
     manifest: SkillPackageManifest
     instruction_content: Optional[str] = None
     path: Optional[str] = None

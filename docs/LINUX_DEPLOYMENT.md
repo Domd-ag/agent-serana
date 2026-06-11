@@ -13,7 +13,9 @@ Serana Backend (systemd: serana-backend)
     |
     +-- /opt/serana              后端代码目录
     +-- /etc/serana/serana.env   运行配置
-    +-- /var/lib/serana          SQLite 数据、运行数据和 Python 虚拟环境
+    +-- /var/lib/serana          SQLite 数据、Skill、浏览器缓存和 Python 虚拟环境
+        +-- skills/              SkillHub 安装和本地导入的持久 skill
+        +-- browser/             HTML 预览、下载、截图等浏览器运行产物
 ```
 
 默认只部署后端。Android 客户端仍由 Android Studio 或 APK 安装；首次打开 App 后，在设置里先配置服务器地址，再配置 LLM 的 Base URL、API Key 和模型。
@@ -44,6 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/d
 配置文件: /etc/serana/serana.env
 数据目录: /var/lib/serana
 Python 虚拟环境: /var/lib/serana/venv
+Skill 持久目录: /var/lib/serana/skills
+浏览器产物目录: /var/lib/serana/browser
 服务用户: serana
 服务名: serana-backend
 监听地址: 0.0.0.0:8000
@@ -116,6 +120,8 @@ SERANA_BRANCH         部署分支
 SERANA_APP_DIR        代码目录
 SERANA_DATA_DIR       数据目录
 SERANA_VENV_DIR       Python 虚拟环境目录
+SERANA_SKILLS_DIR     SkillHub 安装和本地导入的持久 skill 目录
+SERANA_BROWSER_DATA_DIR 浏览器预览、下载和截图目录
 SERANA_ENV_DIR        配置目录
 SERANA_SERVICE_USER   systemd 运行用户
 SERANA_SERVICE_NAME   systemd 服务名
@@ -142,6 +148,8 @@ LOG_LEVEL=INFO
 CORS_ALLOW_ORIGINS=*
 
 DATABASE_URL=sqlite+aiosqlite:////var/lib/serana/serana.db
+SERANA_SKILLS_DIR=/var/lib/serana/skills
+SERANA_BROWSER_DATA_DIR=/var/lib/serana/browser
 
 SECRET_KEY=...
 ENCRYPTION_KEY=...

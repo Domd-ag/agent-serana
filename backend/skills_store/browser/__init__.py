@@ -14,15 +14,24 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
+from app.core.config import get_settings
 from app.core.artifacts import make_download_artifact, make_html_preview_artifact, path_size_bytes
 
 
 _CURRENT_PAGE: dict[str, Any] = {}
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-_PREVIEWS_DIR = Path(__file__).resolve().parent / "previews"
+_BUNDLED_BROWSER_DIR = Path(__file__).resolve().parent
+_CONFIGURED_BROWSER_DATA_DIR = str(get_settings().SERANA_BROWSER_DATA_DIR or "").strip()
+_BROWSER_DATA_DIR = (
+    Path(_CONFIGURED_BROWSER_DATA_DIR).expanduser()
+    if _CONFIGURED_BROWSER_DATA_DIR
+    else _BUNDLED_BROWSER_DIR
+)
+_SCREENSHOTS_DIR = _BROWSER_DATA_DIR / "screenshots"
+_PREVIEWS_DIR = _BROWSER_DATA_DIR / "previews"
 _PREVIEW_CACHE_PATH = _PREVIEWS_DIR / "preview-cache.json"
-_DOWNLOADS_DIR = Path(__file__).resolve().parent / "downloads"
+_DOWNLOADS_DIR = _BROWSER_DATA_DIR / "downloads"
 _DOWNLOADS_MANIFEST_PATH = _DOWNLOADS_DIR / "downloads.jsonl"
 _HTML_PLACEHOLDER_PATTERN = re.compile(
     r"offline demo script here|"
@@ -219,6 +228,32 @@ def _save_preview_cache(cache: dict[str, Any]) -> None:
         json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _html_preview_has_meaningful_body(document: str) -> bool:
+    text = str(document or "")
+    body_match = re.search(r"<body[^>]*>(.*?)</body>", text, flags=re.IGNORECASE | re.DOTALL)
+    body = body_match.group(1) if body_match else text
+    without_scripts = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", body, flags=re.IGNORECASE | re.DOTALL)
+    readable = html.unescape(re.sub(r"<[^>]+>", " ", without_scripts))
+    readable = re.sub(r"\s+", " ", readable).strip()
+    return len(readable) >= 8
+
+
+def _cached_preview_is_usable(preview_path: Path) -> bool:
+    try:
+        document = preview_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    if not _html_preview_has_meaningful_body(document):
+        return False
+    if _HTML_PLACEHOLDER_PATTERN.search(document):
+        return False
+    if _HTML_NETWORK_PATTERN.search(document):
+        return False
+    if _HTML_CONTROL_PATTERN.search(document) and not _HTML_EVENT_BINDING_PATTERN.search(document):
+        return False
+    return True
 
 
 def _preview_result(
@@ -532,16 +567,26 @@ async def create_html_preview(title: str, html: str = "", cache_key: str = "") -
         cache = _load_preview_cache()
         cached_filename = str(cache.get(normalized_cache_key) or "").strip()
         if cached_filename:
-            cached_path = _PREVIEWS_DIR / cached_filename
-            if cached_path.exists() and cached_path.suffix == ".html":
-                return _preview_result(
-                    title=preview_title,
-                    filename=cached_filename,
-                    preview_path=cached_path,
-                    cached=True,
-                )
+            if Path(cached_filename).name != cached_filename:
+                cache.pop(normalized_cache_key, None)
+                await asyncio.to_thread(_save_preview_cache, cache)
+            else:
+                cached_path = _PREVIEWS_DIR / cached_filename
+                if cached_path.exists() and cached_path.suffix == ".html" and _cached_preview_is_usable(cached_path):
+                    return _preview_result(
+                        title=preview_title,
+                        filename=cached_filename,
+                        preview_path=cached_path,
+                        cached=True,
+                    )
+                cache.pop(normalized_cache_key, None)
+                await asyncio.to_thread(_save_preview_cache, cache)
 
-    document = _wrap_html_preview_document(preview_title, str(html or "").strip())
+    raw_html = str(html or "").strip()
+    if not raw_html:
+        return _html_preview_failure("没有找到可复用的演示缓存，也没有收到新的 HTML 内容，已停止生成空白演示。")
+
+    document = _wrap_html_preview_document(preview_title, raw_html)
 
     if not document.strip():
         return _html_preview_failure("\u0048\u0054\u004d\u004c \u9884\u89c8\u5185\u5bb9\u4e3a\u7a7a\uff0c\u5df2\u505c\u6b62\u751f\u6210\u7a7a\u767d\u6f14\u793a\u3002")
@@ -551,6 +596,8 @@ async def create_html_preview(title: str, html: str = "", cache_key: str = "") -
         return _html_preview_failure("\u0048\u0054\u004d\u004c \u9884\u89c8\u5305\u542b\u5916\u90e8\u8054\u7f51\u6216\u5d4c\u5165\u8d44\u6e90\uff0c\u5df2\u62e6\u622a\u3002")
     if _HTML_CONTROL_PATTERN.search(document) and not _HTML_EVENT_BINDING_PATTERN.search(document):
         return _html_preview_failure("\u0048\u0054\u004d\u004c \u9884\u89c8\u5305\u542b\u53ef\u70b9\u51fb\u63a7\u4ef6\uff0c\u4f46\u6ca1\u6709\u68c0\u6d4b\u5230\u4e8b\u4ef6\u7ed1\u5b9a\u3002")
+    if not _html_preview_has_meaningful_body(document):
+        return _html_preview_failure("\u0048\u0054\u004d\u004c \u9884\u89c8\u5185\u5bb9\u4e3a\u7a7a\uff0c\u5df2\u505c\u6b62\u751f\u6210\u7a7a\u767d\u6f14\u793a\u3002")
 
     content_key = _preview_content_key(preview_title, document)
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", preview_title.strip().lower()).strip("-") or "serana-preview"

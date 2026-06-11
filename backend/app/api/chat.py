@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -38,9 +39,203 @@ from app.core.logger import get_logger
 from app.core.models import MemoryArtifact, WorkingMemory
 from app.memory import MemoryService
 from app.memory.background import schedule_memory_task
+from app.skills import SkillManager
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = get_logger(__name__)
+
+
+def _is_explicit_skill_invocation(user_input: str) -> bool:
+    return str(user_input or "").lstrip().startswith("@")
+
+
+def _split_explicit_skill_command(user_input: str) -> tuple[str, str]:
+    text = str(user_input or "").strip()
+    without_marker = text[1:].strip() if text.startswith("@") else text
+    if not without_marker:
+        return "", ""
+    parts = without_marker.split(maxsplit=1)
+    command = parts[0].strip()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    return command, rest
+
+
+def _invocation_examples_for_message(skill) -> str:
+    examples = list(skill.invocation_examples or [])
+    if examples:
+        return "\n".join(f"- `{example}`" for example in examples[:3])
+    return f"- `@{skill.name}`"
+
+
+def _build_skill_invocation_help(user_input: str) -> tuple[str, list[ThinkingBlock], list[ToolCall], str, dict] | None:
+    if not _is_explicit_skill_invocation(user_input):
+        return None
+
+    command, _ = _split_explicit_skill_command(user_input)
+    manager = SkillManager()
+    manager.ensure_initialized()
+    if not command:
+        invocable = manager.list_invocable_executable_skills()
+        if not invocable:
+            message = "现在没有可以用 `@` 直接调用的 python/script 技能。"
+        else:
+            examples = "\n".join(
+                f"- `{(skill.invocation_examples or [f'@{skill.name}'])[0]}`"
+                for skill in invocable[:6]
+            )
+            message = f"可以直接调用这些技能：\n{examples}"
+        return message, [], [], "skill_invocation", {}
+
+    skill, candidates = manager.resolve_invocation_skill(command)
+    if skill is not None:
+        return None
+
+    if candidates:
+        examples = "\n".join(
+            f"- `{(candidate.invocation_examples or [f'@{candidate.name}'])[0]}`"
+            for candidate in candidates[:6]
+        )
+        message = f"`@{command}` 可以匹配多个技能，请选一个完整名称：\n{examples}"
+    else:
+        message = (
+            f"没有找到可以直接调用的 `@{command}` 技能。"
+            "只有已启用的 python/script 技能支持 `@技能名 参数...`。"
+        )
+    return message, [], [], "skill_invocation", {}
+
+
+def _coerce_explicit_skill_arguments(skill, tool, argument_text: str) -> tuple[dict, str | None]:
+    parameters = list(skill.invocation_parameters or [])
+    schema = tool.input_schema
+    required_names = [str(name) for name in (schema.required or [])]
+    ordered_names = [str(parameter.get("name")) for parameter in parameters if parameter.get("name")]
+    ordered_names = list(dict.fromkeys([*ordered_names, *required_names, *list((schema.properties or {}).keys())]))
+    if not ordered_names:
+        return {}, None
+
+    required_count = len(required_names)
+    raw_values: list[str]
+    if len(ordered_names) == 1:
+        raw_values = [argument_text.strip()] if argument_text.strip() else []
+    else:
+        raw_values = argument_text.split(maxsplit=max(0, len(ordered_names) - 1))
+
+    if len(raw_values) < required_count or any(not value.strip() for value in raw_values[:required_count]):
+        example = (skill.invocation_examples or [f"@{skill.name} " + " ".join(f"<{name}>" for name in ordered_names)])[0]
+        parameter_names = "、".join(required_names or ordered_names)
+        return {}, f"`{skill.name}` 需要 {len(required_names or ordered_names)} 个参数：{parameter_names}。\n示例：`{example}`"
+
+    properties = dict(schema.properties or {})
+    arguments = {}
+    for name, raw_value in zip(ordered_names, raw_values):
+        value = raw_value.strip()
+        expected = str((properties.get(name) or {}).get("type") or "string").lower()
+        if expected == "integer":
+            try:
+                arguments[name] = int(value)
+            except ValueError:
+                return {}, f"`{name}` 需要整数，当前收到：`{value}`。"
+        elif expected == "number":
+            try:
+                arguments[name] = float(value)
+            except ValueError:
+                return {}, f"`{name}` 需要数字，当前收到：`{value}`。"
+        elif expected == "boolean":
+            lowered = value.lower()
+            if lowered not in {"true", "false", "1", "0", "yes", "no", "是", "否"}:
+                return {}, f"`{name}` 需要布尔值，当前收到：`{value}`。"
+            arguments[name] = lowered in {"true", "1", "yes", "是"}
+        else:
+            arguments[name] = value
+    return arguments, None
+
+
+def _format_explicit_skill_output(output) -> str:
+    if isinstance(output, dict):
+        for key in ("summary", "content", "result", "text", "message"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(output, ensure_ascii=False, indent=2)
+    if output is None:
+        return "技能执行完成，但没有返回可展示内容。"
+    return str(output).strip()
+
+
+async def _try_explicit_skill_invocation(
+    user_input: str,
+) -> tuple[str, list[ThinkingBlock], list[ToolCall], bool, str, dict] | None:
+    help_payload = _build_skill_invocation_help(user_input)
+    if help_payload is not None:
+        message, thinking_blocks, tool_calls, execution_mode, delegation_plan = help_payload
+        return message, thinking_blocks, tool_calls, False, execution_mode, delegation_plan
+
+    if not _is_explicit_skill_invocation(user_input):
+        return None
+
+    command, argument_text = _split_explicit_skill_command(user_input)
+    manager = SkillManager()
+    manager.ensure_initialized()
+    skill, _ = manager.resolve_invocation_skill(command)
+    if skill is None:
+        return None
+    if not skill.manifest.tools:
+        return (
+            f"`{skill.name}` 没有声明可调用工具，不能通过 `@` 执行。",
+            [],
+            [],
+            False,
+            "skill_invocation",
+            {},
+        )
+    tool = skill.manifest.tools[0]
+    arguments, error = _coerce_explicit_skill_arguments(skill, tool, argument_text)
+    if error:
+        return error, [], [], False, "skill_invocation", {}
+
+    tool_func = manager.get_tool_function(skill.name, tool.name)
+    if tool_func is None:
+        return (
+            f"`{skill.name}` 已安装，但当前运行时没有注册 `{tool.name}`。请重新安装或重启后端。",
+            [],
+            [],
+            False,
+            "skill_invocation",
+            {},
+        )
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    thinking_blocks = [
+        ThinkingBlock(
+            id=f"skill-invocation-{skill.name}",
+            title="技能调用",
+            content=f"使用 @{skill.name} 调用 {tool.name}，参数：{arguments}",
+            timestamp=timestamp,
+            is_expanded=False,
+        )
+    ]
+    try:
+        maybe_result = tool_func(**arguments)
+        result = await maybe_result if inspect.isawaitable(maybe_result) else maybe_result
+        content = _format_explicit_skill_output(result)
+        status = "completed"
+        output = result
+    except Exception as exc:
+        content = f"`{skill.name}` 执行失败：{exc}"
+        status = "failed"
+        output = {"error": str(exc)}
+
+    tool_calls = [
+        ToolCall(
+            id=f"skill-tool-{skill.name}-{tool.name}",
+            name=f"{skill.name}.{tool.name}",
+            input=arguments,
+            output=output,
+            status=status,
+            timestamp=timestamp,
+        )
+    ]
+    return content, thinking_blocks, tool_calls, False, "skill_invocation", {}
 
 
 async def _run_memory_consolidation(
@@ -208,6 +403,10 @@ async def _generate_assistant_payload(
     thinking_blocks: list[ThinkingBlock] = []
     memory_context_included = False
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    explicit_skill_result = await _try_explicit_skill_invocation(user_input)
+    if explicit_skill_result is not None:
+        return explicit_skill_result
 
     try:
         prepared = await prepare_serana_runtime(
@@ -695,6 +894,41 @@ async def send_chat_message(
     if message_request.stream:
         async def generate_response():
             try:
+                explicit_skill_result = await _try_explicit_skill_invocation(message_request.content)
+                if explicit_skill_result is not None:
+                    (
+                        assistant_content,
+                        thinking_blocks,
+                        tool_calls,
+                        memory_context_included,
+                        execution_mode,
+                        delegation_plan,
+                    ) = explicit_skill_result
+                    await _persist_assistant_result(
+                        db,
+                        chat_session=chat_session,
+                        assistant_content=assistant_content,
+                        thinking_blocks=thinking_blocks,
+                        tool_calls=tool_calls,
+                        user_input=message_request.content,
+                        user_id=user.id,
+                        memory_context_included=memory_context_included,
+                        execution_mode=execution_mode,
+                        delegation_plan=delegation_plan,
+                        llm_config=llm_config,
+                    )
+                    for block in thinking_blocks:
+                        yield f"data: {json.dumps({'type': 'thinking_block', 'content': block.model_dump()}, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0.05)
+                    for tool_call in tool_calls:
+                        yield f"data: {json.dumps({'type': 'tool_call', 'content': tool_call.model_dump()}, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0.05)
+                    for char in assistant_content:
+                        yield f"data: {json.dumps({'type': 'content', 'content': char}, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0.01)
+                    yield f"data: {json.dumps({'type': 'done', 'session_id': chat_session.id, 'execution_mode': execution_mode, 'delegation_plan': delegation_plan, 'thinking_blocks': [block.model_dump() for block in thinking_blocks], 'tool_calls': [tool_call.model_dump() for tool_call in tool_calls]}, ensure_ascii=False)}\n\n"
+                    return
+
                 prepared = await _prepare_serana_chat_execution(
                     db=db,
                     user=user,

@@ -1,121 +1,62 @@
 # app/skills 目录说明
 
-这里是后端 skill 管理层，负责本地技能扫描、启停、导入、卸载、更新，以及 SkillHub 远程市场接入。
+这里是后端 Skill 管理层，负责本地技能扫描、启停、导入、卸载、更新，以及 SkillHub 远程市场接入。
 
 ## 文件结构
 
 ```text
 skills/
 +-- __init__.py
-+-- loader.py      读取 skill.json / SKILL.md，并注册 Python / Script 工具
-+-- manager.py     SkillManager 单例，负责扫描、安装、缓存、卸载与工具查找
-+-- models.py      本地 skill、市场 skill、生命周期响应模型
-+-- script_bootstrap.py  Script Skill 子进程安全边界与审计钩子
-+-- script_runtime.py    ScriptSkillRunner、PythonScriptAdapter 与 ShellScriptAdapter
++-- invocation.py        从 SKILL.md / skill.json 提取统一的 `@skill 参数` 调用协议
++-- loader.py            读取 skill.json / SKILL.md，并注册 Python / Script 工具
++-- manager.py           SkillManager 单例，负责扫描、安装、缓存、卸载与工具查找
++-- models.py            本地 skill、市场 skill、生命周期响应模型
++-- script_bootstrap.py  Python Script Skill 子进程入口
++-- script_runtime.py    ScriptSkillRunner、PythonScriptAdapter 和 ShellScriptAdapter
 +-- standardizer.py      将 SkillHub 下载包转换为统一 Skill 清单
-+-- skillhub.py    SkillHub HTTP 客户端与远程 skill 转换
-+-- validator.py   skill 目录结构校验
++-- skillhub.py          SkillHub HTTP 客户端与远程 skill 转换
++-- validator.py         skill 目录结构校验
 ```
 
-## 当前运行方式
+## 运行位置
 
-- `backend/skills_store/` 是 skill 文件仓库。
-- `backend/skills_store/installed/` 存放运行时安装的 managed skills。
-- `backend/skills_store/.staging/` 存放等待审批的本地 ZIP 导入暂存。
-- 项目当前不再内置旧的 bundled skills，默认只加载运行时安装内容。
-- `SkillManager.ensure_initialized()` 会扫描可用 skill，并把 instruction skill 注入到 Serana 的上下文构建流程。
+- `backend/skills_store/` 是项目内置 skill 仓库，当前主要保留 `browser` 基础能力。
+- `SERANA_SKILLS_DIR` 可以指定持久化 skill 仓库；Linux 部署默认写入 `/var/lib/serana/skills`。
+- `$SERANA_SKILLS_DIR/installed/` 存放运行时安装的 managed skills。
+- `$SERANA_SKILLS_DIR/.staging/` 存放等待审批的本地 ZIP 导入暂存。
+- 未设置 `SERANA_SKILLS_DIR` 时，本地开发回落到 `backend/skills_store/installed/`。
 
-## 关键链路
+## 当前调用协议
 
-1. 扫描本地目录并加载 `skill.json`、`SKILL.md` 和 Python 工具。
-2. 把工具注册成 `skill_name.tool_name`。
-3. instruction skill 的 `SKILL.md` 会进入 Serana prompt 增强。
-4. SkillHub 市场安装和更新走两步式审批。
-5. 本地 ZIP 导入也走两步式审批，并先写入 `.staging/`。
-6. 卸载只允许作用于 `installed/` 下的 managed skills。
-7. 生命周期状态统一包含来源、信任状态、生效范围、是否可更新、是否可卸载。
-
-## 统一接入协议
-
-- `runtime=python` 且 `tools` 非空：
-  安装后会被 `SkillManager` 注册成真实可执行工具，统一进入 `skill_name.tool_name` 命名空间。
-  对话时优先由轻量 route 和 direct tool executor 选择并执行，再走统一结果回灌。
 - `runtime=instruction`：
-  安装后不会直接执行，而是把 `SKILL.md` 作为行为和领域指导注入到 Serana 上下文。
-  对话时会优先挑选和当前问题相关的 instruction skill，再生成 direct reply 或辅助 planning。
-  SkillHub 包内即使附带 `.sh` 等脚本，只要清单仍是 `runtime=instruction` 且 `tools=[]`，后端就不会把脚本当作已注册工具自动执行；这样可以避免未声明参数、运行环境和权限的市场脚本绕过统一工具协议与审批门禁。
-  如果 `SKILL.md` 同时引用多个 `.sh`，且包内没有显式 `runtime=script` 清单，安装器会按 instruction skill 保留它，而不是猜测脚本入口。
-- `runtime=script`：
-  Python 包由 `PythonScriptAdapter` 执行技能目录内声明的 `.py` 入口。
-  入口明确的 SkillHub `.sh` 包会在安装时由 `SkillStandardizer` 自动转换，并通过 `ShellScriptAdapter` 执行。
-  Python adapter 使用 JSON stdin/stdout 协议；Shell adapter 按 `argument_order` 传递位置参数，并把文本或 JSON stdout 统一包装为工具结果。
-  安装后会注册为普通 `skill_name.tool_name` 工具；相关可执行 Skill 会在 Browser 兜底之前参与选择，失败后才继续走 Browser。
-- `capabilities` / `intents`：
-  skill 包现在可以在 `skill.json` 中显式声明能力标签和意图短语。
-  `capabilities` 适合写领域或能力名，比如 `weather`、`calendar`、`coding`。
-  `intents` 适合写用户会提出的请求类型，比如 `天气查询`、`写代码`、`行程安排`。
-  对话相关性匹配会优先使用这两个字段，再回退到 skill 名称和描述。
-- 浏览器兜底：
-  只有本地可执行 skill 不命中，且没有相关 instruction skill 可以直接支撑回答，或者用户明确要求“上网搜 / 用浏览器 / 打开网页”时，才会走 browser 工具链。
+  安装启用后自动参与 Serana prompt 增强。它不直接执行，不显示在聊天框 `@` 调用候选里。
+- `runtime=python` / `runtime=script`：
+  普通自然语言不会自动命中。只有用户在聊天框输入 `@skill_name 参数...` 时，后端才会执行对应工具。
+- 天气自然语言请求：
+  统一走 browser / wttr 页面链路，不再优先调用已安装天气脚本。需要执行天气脚本时必须显式输入类似 `@weather_cn_pro 上海`。
+- 安装或加载技能时，`SkillManager` 会根据 `skill.json` 的 `tools[].input_schema`、`script.argument_order` 和 `SKILL.md` 生成标准调用协议：
+  - 会读取 Quick Start / Usage / 示例 / 用法等段落。
+  - 会识别代码块里的 `./tool.sh 上海`、`bash tool.sh 北京 3`、已有 `@skill 参数` 等命令。
+  - 会从 Markdown 参数表和项目符号里提取参数说明、示例值和可选/必填状态。
+  - 对没有 `skill.json` 的 SkillHub shell 包，`standardizer.py` 会把这些信息写入生成的 `skill.json`，保证脚本参数顺序和前端示例一致。
+  - `run_mode_description`：说明该技能如何参与 Serana。
+  - `invocation_name`：聊天框里的 `@` 名称。
+  - `invocation_parameters`：参数名、类型、描述和是否必填。
+  - `invocation_examples`：前端展示给用户的调用示例。
+- 后端 API 层会在进入 Serana agent loop 前拦截 `@` 命令，完成技能匹配、参数校验、工具执行和结果格式化。未补齐参数时会返回示例，不会进入 LLM 规划。
 
-这意味着以后从 SkillHub 下载的新 skill，不需要再为每个领域单独写一条天气式特判。只要 skill 包本身声明清楚自己是工具型还是 instruction 型，就会进入同一套对话接入流程。
+## 统一接入链路
 
-## Script Skill 安全边界
-
-- 入口必须是 Skill 自身目录内的 `.py` 文件。
-- Shell 入口必须是 Skill 自身目录内、UTF-8 编码且通过静态安全检查的 `.sh` 文件。
-- 使用当前后端 Python 启动独立隔离进程，默认不继承敏感环境变量。
-- Python adapter 禁止 shell、`subprocess`、`multiprocessing` 和 `ctypes`。
-- Shell adapter 需要后端一次性安装 Bash，并拒绝系统管理、破坏性删除、动态执行和远程执行命令。
-- Script Runtime 会严格校验参数类型，布尔值不会被误当成整数；输入、输出和执行时长超过限制时会返回统一可读错误，并在终止子进程后完整回收读写任务。
-- Skill 的 `instruction_file`、Python 入口和 Script 入口都必须位于自身目录；带 UTF-8 BOM 的市场清单也可以正常加载。
-- 远程 Skill 更新采用备份替换：新版本复制或运行时注册失败时，会自动恢复并重新注册上一版本。
-- 默认禁止网络和文件写入；仅支持显式声明 `network`、`filesystem_write`。
-- 即使声明 `filesystem_write`，也只能修改 Skill 自身目录。
-- 读取范围限制为 Skill 自身目录和 Python 运行时目录。
-- 工具参数必须符合 manifest 中声明的 schema，未知参数会被拒绝。
-- Runner 强制执行输入上限、输出上限、超时和 `max_instances` 并发限制。
-- 这是一层应用级安全边界，不等同于容器或操作系统级强隔离；不应把来源不可信的脚本标记为可执行 Skill。
-
-完整下载、标准化和运行规范见 [docs/SKILL_RUNTIME_SPEC.md](/D:/agent-serana/docs/SKILL_RUNTIME_SPEC.md)。
-
-标准清单示例：
-
-```json
-{
-  "name": "example_script",
-  "version": "1.0.0",
-  "description": "示例 Script Skill",
-  "runtime": "script",
-  "entrypoint": "main.py",
-  "agent_type": "all",
-  "max_instances": 1,
-  "permissions": ["network"],
-  "script": {
-    "adapter": "python",
-    "timeout_seconds": 15,
-    "max_input_chars": 32768,
-    "max_output_chars": 65536
-  },
-  "tools": [
-    {
-      "name": "lookup",
-      "description": "查询数据",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "query": {"type": "string"}
-        },
-        "required": ["query"]
-      }
-    }
-  ]
-}
-```
+1. SkillHub 或本地 ZIP 导入后，`standardizer.py` 尝试读取既有 `skill.json`。
+2. 如果包内声明了有效 `runtime=python` 或 `runtime=script`，按声明注册工具。
+3. 如果没有有效可执行清单，则作为 `runtime=instruction` 处理，只参与 prompt 增强。
+4. `loader.py` 注册工具为 `skill_name.tool_name`。
+5. `manager.py` 生成调用说明和 `@` 示例，并通过 `/api/v1/skills` 返回给前端。
+6. 聊天 API 只在用户显式输入 `@skill_name 参数...` 时调用 python/script skill。
 
 ## 维护约定
 
 - 修改 skill 包格式时，优先检查 `models.py`、`validator.py`、`loader.py`。
-- 修改安装、更新、卸载、暂存生命周期时，优先检查 `manager.py`。
-- 修改 API 返回结构时，同步检查 [backend/app/api/skills.py](/D:/agent-serana/backend/app/api/skills.py) 和 Android `SkillsViewModel`。
-- 新增运行时生成目录时，同步更新根目录 `.gitignore` 和 [backend/skills_store/README.md](/D:/agent-serana/backend/skills_store/README.md)。
+- 修改安装、更新、卸载、暂存生命周期时，优先检查 `manager.py` 和 `backend/app/api/skills.py`。
+- 修改 API 返回结构时，同步检查 Android `ApiService.kt`、`SkillsViewModel.kt` 和聊天输入框提示逻辑。
+- 新增运行时生成目录时，同步更新根目录 `.gitignore`、部署脚本和 `backend/skills_store/README.md`。

@@ -126,6 +126,8 @@ import com.serana.app.data.models.ThinkingBlock
 import com.serana.app.data.models.ToolTrace
 import com.serana.app.viewmodel.ChatViewModel
 import com.serana.app.viewmodel.SettingsViewModel
+import com.serana.app.viewmodel.SkillInvocationParameter
+import com.serana.app.viewmodel.SkillInvocationSuggestion
 import com.serana.app.viewmodel.SkillsViewModel
 import java.time.Instant
 import java.time.LocalDate
@@ -152,6 +154,7 @@ fun ChatScreen(
     val isClearingSessions by viewModel.isClearingSessions.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isSubmittingApproval by viewModel.isSubmittingApproval.collectAsState()
+    val skillInvocationSuggestions by viewModel.skillInvocationSuggestions.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var showSkillsDialog by rememberSaveable { mutableStateOf(false) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
@@ -216,7 +219,10 @@ fun ChatScreen(
     }
 
     if (showSkillsDialog) {
-        SkillsOverlayDialog(onDismiss = { showSkillsDialog = false })
+        SkillsOverlayDialog(onDismiss = {
+            showSkillsDialog = false
+            viewModel.refreshSkillInvocationSuggestions()
+        })
     }
 
     if (showSettingsDialog) {
@@ -345,6 +351,10 @@ fun ChatScreen(
                             autoFollowLatest = true
                             viewModel.sendMessage(inputText)
                             inputText = ""
+                        },
+                        skillSuggestions = skillInvocationSuggestions,
+                        onApplySkillSuggestion = { example ->
+                            inputText = example
                         },
                         onFocus = {
                             autoFollowLatest = true
@@ -3243,96 +3253,463 @@ private fun MessageInput(
     inputText: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    skillSuggestions: List<SkillInvocationSuggestion>,
+    onApplySkillSuggestion: (String) -> Unit,
     onFocus: () -> Unit,
     isLoading: Boolean,
 ) {
     val isDarkTheme = isSystemInDarkTheme()
     val inputInteractionSource = remember { MutableInteractionSource() }
-    Surface(
+    var validationMessage by remember { mutableStateOf<String?>(null) }
+    val invocationDraft = remember(inputText, skillSuggestions) {
+        currentSkillInvocationDraft(inputText, skillSuggestions)
+    }
+    val filteredSkillSuggestions = invocationDraft?.matches.orEmpty().take(6)
+    val attemptSend = {
+        val sendIssue = skillInvocationSendIssue(inputText, skillSuggestions)
+        if (sendIssue != null) {
+            validationMessage = sendIssue
+        } else if (inputText.isNotBlank() && !isLoading) {
+            validationMessage = null
+            onSend()
+        }
+    }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .navigationBarsPadding()
             .padding(bottom = 4.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = if (isDarkTheme) {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
-        } else {
-            Color.White.copy(alpha = 0.93f)
-        },
-        shadowElevation = 1.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)),
     ) {
-        Row(
+        AnimatedVisibility(
+            visible = (filteredSkillSuggestions.isNotEmpty() || validationMessage != null) && !isLoading,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            SkillInvocationSuggestionsPanel(
+                draft = invocationDraft,
+                suggestions = filteredSkillSuggestions,
+                validationMessage = validationMessage,
+                onApply = { example ->
+                    validationMessage = null
+                    onApplySkillSuggestion(example)
+                },
+                onAppendArgument = { argument ->
+                    validationMessage = null
+                    onTextChange(appendSkillInvocationArgument(inputText, argument))
+                },
+                isDarkTheme = isDarkTheme,
+            )
+        }
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = if (isDarkTheme) {
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+            } else {
+                Color.White.copy(alpha = 0.93f)
+            },
+            shadowElevation = 1.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = {
+                        validationMessage = null
+                        onTextChange(it)
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(
+                            indication = null,
+                            interactionSource = inputInteractionSource,
+                        ) { onFocus() }
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) {
+                                onFocus()
+                            }
+                        },
+                    placeholder = {
+                        Text(
+                            "告诉 Serana 你想做什么…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        )
+                    },
+                    shape = RoundedCornerShape(18.dp),
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { attemptSend() }),
+                    enabled = !isLoading,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    )
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Surface(
+                    shape = CircleShape,
+                    color = if (inputText.isNotBlank() && !isLoading) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.88f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)
+                    },
+                    onClick = {
+                        attemptSend()
+                    },
+                ) {
+                    Box(
+                        modifier = Modifier.size(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "发送",
+                            tint = if (inputText.isNotBlank() && !isLoading) {
+                                Color.White
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class SkillInvocationDraft(
+    val command: String,
+    val argumentText: String,
+    val arguments: List<String>,
+    val matches: List<SkillInvocationSuggestion>,
+    val selected: SkillInvocationSuggestion?,
+    val missingRequired: List<SkillInvocationParameter>,
+)
+
+private fun currentSkillInvocationDraft(
+    inputText: String,
+    suggestions: List<SkillInvocationSuggestion>,
+): SkillInvocationDraft? {
+    val trimmed = inputText.trimStart()
+    if (!trimmed.startsWith("@")) return null
+    val withoutMarker = trimmed.drop(1)
+    val command = withoutMarker.takeWhile { !it.isWhitespace() }
+    val argumentText = withoutMarker.drop(command.length).trimStart()
+    val arguments = if (argumentText.isBlank()) {
+        emptyList()
+    } else {
+        argumentText.split(Regex("\\s+")).filter { it.isNotBlank() }
+    }
+    val query = command.lowercase()
+    val matches = suggestions
+        .filter { suggestion ->
+            query.isBlank() ||
+                suggestion.name.equals(query, ignoreCase = true) ||
+                suggestion.name.startsWith(query, ignoreCase = true) ||
+                suggestion.name.contains(query, ignoreCase = true)
+        }
+        .sortedWith(
+            compareBy<SkillInvocationSuggestion> {
+                when {
+                    it.name.equals(query, ignoreCase = true) -> 0
+                    it.name.startsWith(query, ignoreCase = true) -> 1
+                    else -> 2
+                }
+            }.thenBy { it.name.length }.thenBy { it.name }
+        )
+    val selected = matches.firstOrNull { it.name.equals(query, ignoreCase = true) }
+        ?: matches.firstOrNull()
+    val required = selected?.parameters
+        ?.filter { it.required }
+        ?.takeIf { it.isNotEmpty() }
+        ?: selected?.let { suggestion ->
+            List(suggestion.parameterCount) { index ->
+                SkillInvocationParameter(
+                    name = "参数${index + 1}",
+                    description = "",
+                    required = true,
+                    example = null,
+                )
+            }
+        }.orEmpty()
+    val missingRequired = required.drop(arguments.size)
+    return SkillInvocationDraft(
+        command = command,
+        argumentText = argumentText,
+        arguments = arguments,
+        matches = matches,
+        selected = selected,
+        missingRequired = missingRequired,
+    )
+}
+
+private fun skillInvocationSendIssue(
+    inputText: String,
+    suggestions: List<SkillInvocationSuggestion>,
+): String? {
+    val draft = currentSkillInvocationDraft(inputText, suggestions) ?: return null
+    if (draft.command.isBlank()) {
+        return "先选择一个技能命令。"
+    }
+    val selected = draft.selected ?: return "没有找到 @${draft.command} 对应的可执行技能。"
+    if (draft.missingRequired.isNotEmpty()) {
+        val missing = draft.missingRequired.joinToString("、") { it.name }
+        val example = selected.example.takeIf { it.isNotBlank() }
+        return buildString {
+            append("@${selected.name} 还缺少：")
+            append(missing)
+            if (example != null) {
+                append("。例如：")
+                append(example)
+            }
+        }
+    }
+    return null
+}
+
+private fun appendSkillInvocationArgument(inputText: String, argument: String): String {
+    val value = argument.trim()
+    if (value.isBlank()) return inputText
+    val trimmedEnd = inputText.trimEnd()
+    return if (trimmedEnd.endsWith("@")) {
+        "$trimmedEnd$value"
+    } else {
+        "$trimmedEnd $value"
+    }
+}
+
+@Composable
+private fun SkillInvocationSuggestionsPanel(
+    draft: SkillInvocationDraft?,
+    suggestions: List<SkillInvocationSuggestion>,
+    validationMessage: String?,
+    onApply: (String) -> Unit,
+    onAppendArgument: (String) -> Unit,
+    isDarkTheme: Boolean,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = if (isDarkTheme) {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f)
+        } else {
+            Color.White.copy(alpha = 0.96f)
+        },
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)),
+        shadowElevation = 1.dp,
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = onTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(
-                        indication = null,
-                        interactionSource = inputInteractionSource,
-                    ) { onFocus() }
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            onFocus()
-                        }
-                    },
-                placeholder = {
-                    Text(
-                        "告诉 Serana 你想做什么…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                    )
-                },
-                shape = RoundedCornerShape(18.dp),
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
-                enabled = !isLoading,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                ),
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Surface(
-                shape = CircleShape,
-                color = if (inputText.isNotBlank() && !isLoading) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.88f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)
-                },
-                onClick = {
-                    if (inputText.isNotBlank() && !isLoading) {
-                        onSend()
-                    }
-                },
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    modifier = Modifier.size(32.dp),
-                    contentAlignment = Alignment.Center,
+                Column {
+                    Text(
+                        text = "技能命令",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = draft?.selected?.let { "将调用 @${it.name}" } ?: "输入 @ 选择可执行技能",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                draft?.selected?.runtime?.let { runtime ->
+                    StatusPill(
+                        label = runtime,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            if (validationMessage != null) {
+                Text(
+                    text = validationMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (draft?.missingRequired?.isNotEmpty() == true) {
+                val nextParameter = draft.missingRequired.first()
+                Text(
+                    text = "还缺少 ${nextParameter.name}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            draft?.selected?.let { selected ->
+                SkillInvocationParameterRow(
+                    suggestion = selected,
+                    filledCount = draft.arguments.size,
+                    onAppendArgument = onAppendArgument,
+                )
+            }
+            suggestions.forEach { suggestion ->
+                val selected = draft?.selected?.name == suggestion.name
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                            } else {
+                                Color.Transparent
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        .clickable { onApply(suggestion.example) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "发送",
-                        tint = if (inputText.isNotBlank() && !isLoading) {
-                            Color.White
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = highlightedInvocationName(suggestion.name, draft?.command.orEmpty()),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "${suggestion.parameterCount} 必填",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Text(
+                            suggestion.example,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        if (selected) "已匹配" else "选择",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.size(14.dp),
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SkillInvocationParameterRow(
+    suggestion: SkillInvocationSuggestion,
+    filledCount: Int,
+    onAppendArgument: (String) -> Unit,
+) {
+    val parameters = suggestion.parameters.takeIf { it.isNotEmpty() }
+        ?: List(suggestion.parameterCount) { index ->
+            SkillInvocationParameter(
+                name = "参数${index + 1}",
+                description = "",
+                required = true,
+                example = null,
+            )
+        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        parameters.forEachIndexed { index, parameter ->
+            val filled = index < filledCount
+            val active = index == filledCount && parameter.required
+            val chipColor = when {
+                filled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                active -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+            }
+            val example = parameter.example
+                ?.takeIf { it.isNotBlank() }
+                ?: parameterPlaceholderForInput(parameter)
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = chipColor,
+                border = BorderStroke(
+                    1.dp,
+                    if (active) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.58f)
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
+                    },
+                ),
+                onClick = {
+                    if (!filled && example.isNotBlank()) {
+                        onAppendArgument(example)
+                    }
+                },
+            ) {
+                Text(
+                    text = buildString {
+                        append(if (filled) "已填 " else if (active) "补全 " else "")
+                        append(parameter.name)
+                    },
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (active) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private fun parameterPlaceholderForInput(parameter: SkillInvocationParameter): String {
+    val name = parameter.name.lowercase()
+    return when {
+        name.contains("city") || name.contains("location") || name.contains("地点") -> "上海"
+        name.contains("day") || name.contains("count") || name.contains("num") || name.contains("天数") -> "3"
+        name.contains("url") || name.contains("link") -> "https://example.com"
+        else -> "<${parameter.name}>"
+    }
+}
+
+private fun highlightedInvocationName(name: String, query: String): AnnotatedString {
+    val display = "@$name"
+    if (query.isBlank()) return AnnotatedString(display)
+    val start = name.indexOf(query, ignoreCase = true)
+    if (start < 0) return AnnotatedString(display)
+    val absoluteStart = start + 1
+    val absoluteEnd = absoluteStart + query.length
+    return buildAnnotatedString {
+        append(display.substring(0, absoluteStart))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+            append(display.substring(absoluteStart, absoluteEnd))
+        }
+        append(display.substring(absoluteEnd))
     }
 }

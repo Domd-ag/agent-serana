@@ -7,13 +7,13 @@
 ```text
 backend/
 +-- app/                 后端应用源码
-+-- skills_store/        本地 Sebastian 风格 skill 仓库
++-- skills_store/        项目内置 skill 和本地开发默认 skill 仓库
 +-- requirements.txt     Python 依赖
 +-- test_api_flows.py    主要 API/agent 回归测试
 +-- test_full_system.py  全链路手动/集成验证
 ```
 
-`venv/`、`__pycache__/`、浏览器截图和 HTML 预览属于本地运行产物，不属于源码结构。
+`venv/`、`__pycache__/`、浏览器截图和 HTML 预览属于本地运行产物，不属于源码结构。Linux 部署时，运行时安装的 skill 默认放在 `/var/lib/serana/skills`，浏览器产物默认放在 `/var/lib/serana/browser`。
 
 ## 主要功能
 
@@ -23,7 +23,7 @@ backend/
 - `app/core/` 放置数据库、模型、schema、LLM 网关、审计、日志等共享基础设施。
 - `app/memory/` 管理长期事实记忆、resident snapshot、working memory、历史检索和 prompt 注入。
 - `app/skills/` 负责 Sebastian 风格 skill 的加载、校验、启停、SkillHub 搜索/安装、更新、卸载和生命周期状态。
-- `skills_store/` 存放可被 `SkillManager` 扫描加载的本地 skill 包。
+- `skills_store/` 存放项目内置 skill；本地开发未配置 `SERANA_SKILLS_DIR` 时，也会作为 managed skill 的默认仓库。
 
 ## 常用入口
 
@@ -43,6 +43,8 @@ backend/
 - `CORS_ALLOW_ORIGINS` 默认允许所有来源，正式部署时可改成逗号分隔的可信前端地址。
 - `SKILLHUB_BASE_URL` 控制 SkillHub API 来源，默认 `https://api.skillhub.cn`。
 - `SKILLHUB_PUBLIC_BASE_URL` 控制 SkillHub 前端展示链接，默认 `https://skillhub.cn`。
+- `SERANA_SKILLS_DIR` 控制 SkillHub 安装和本地导入 skill 的持久目录；Linux 部署默认 `/var/lib/serana/skills`。
+- `SERANA_BROWSER_DATA_DIR` 控制 HTML 预览、下载和截图的持久目录；Linux 部署默认 `/var/lib/serana/browser`。
 - SQLite 默认文件是后端工作目录下的 `serana.db`；需要换库时修改 `DATABASE_URL`。
 
 ## 维护约定

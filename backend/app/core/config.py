@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     SKILLHUB_BASE_URL: str = "https://api.skillhub.cn"
     SKILLHUB_PUBLIC_BASE_URL: str = "https://skillhub.cn"
 
+    # Persistent runtime stores. Empty values keep local development paths under backend/skills_store.
+    SERANA_SKILLS_DIR: str = ""
+    SERANA_BROWSER_DATA_DIR: str = ""
+
     def cors_allow_origins(self) -> list[str]:
         if self.CORS_ALLOW_ORIGINS.strip() == "*":
             return ["*"]

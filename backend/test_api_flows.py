@@ -40,7 +40,7 @@ from app.core.security import encrypt_data
 from app.main import app
 from app.memory import MemoryInjector, MemoryService, ProfileFactsManager, ResidentMemoryManager, WorkingMemoryManager
 from app.skills import SkillManager
-from app.skills.models import MarketplaceSearchResponse, MarketplaceSkillSummary, SkillTool, SkillToolInputSchema
+from app.skills.models import MarketplaceSearchResponse, MarketplaceSkillSummary
 from app.skills.validator import SkillValidator
 
 
@@ -87,8 +87,7 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
             "thinking_blocks": [],
         }
 
-        with patch.object(SkillManager, "find_relevant_executable_tools", return_value=[]):
-            result = await try_lightweight_conversation(state, llm)
+        result = await try_lightweight_conversation(state, llm)
 
         self.assertEqual(result["execution_mode"], "direct")
         self.assertEqual(result["goal_type"], "planning")
@@ -148,8 +147,7 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
             "thinking_blocks": [],
         }
 
-        with patch.object(SkillManager, "find_relevant_executable_tools", return_value=[]):
-            result = await try_lightweight_conversation(state, llm)
+        result = await try_lightweight_conversation(state, llm)
 
         self.assertEqual(result["execution_mode"], "direct")
         self.assertIn("数据库索引", result["final_response"])
@@ -530,10 +528,6 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "app.agents.serana.nodes._try_local_tool_response",
             new=AsyncMock(return_value=None),
-        ), patch.object(
-            SkillManager,
-            "find_relevant_executable_tools",
-            return_value=[],
         ):
             result = await try_lightweight_conversation(state, llm)
 
@@ -543,42 +537,14 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
         if llm.route_request:
             self.assertIn("请用 Java 写一个排序示例", llm.route_request)
 
-    async def test_installed_executable_skill_runs_before_weather_browser_fallback(self):
-        script_tool_definition = SkillTool(
-            name="get_weather",
-            description="查询指定城市的实时天气",
-            input_schema=SkillToolInputSchema(
-                properties={"city": {"type": "string"}},
-                required=["city"],
-            ),
-        )
-        script_skill = SimpleNamespace(
-            name="weather_cn_script",
-            description="中文天气查询",
-            manifest=SimpleNamespace(
-                capabilities=["weather", "天气"],
-                intents=["天气查询"],
-            ),
-        )
-
-        async def script_tool(city: str):
-            return {"summary": f"{city}：多云，24°C", "source": "script"}
-
-        class ScriptSelectingLLM(FakeLLM):
-            async def ainvoke(self, messages):
-                if "Choose whether one installed executable Skill" in messages[0].content:
-                    return FakeResponse(
-                        json.dumps(
-                            {
-                                "use_tool": True,
-                                "tool_name": "weather_cn_script.get_weather",
-                                "arguments": {"city": "上海"},
-                                "reason": "Installed weather Skill matches.",
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
-                return await super().ainvoke(messages)
+    async def test_weather_request_uses_browser_instead_of_installed_executable_skill(self):
+        async def browser_open_page(url: str, max_chars: int = 6000):
+            return {
+                "summary": "上海：多云，24°C",
+                "content": "上海：多云，24°C",
+                "url": url,
+                "status": "ok",
+            }
 
         state = {
             "user_input": "上海天气",
@@ -589,33 +555,23 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
         original_get_tool_function = SkillManager.get_tool_function
 
         def get_tool_function(manager, skill_name, tool_name):
-            if (skill_name, tool_name) == ("weather_cn_script", "get_weather"):
-                return script_tool
+            if (skill_name, tool_name) == ("browser", "open_page"):
+                return browser_open_page
+            if skill_name.startswith("weather"):
+                raise AssertionError("natural language weather must not invoke installed weather skills")
             return original_get_tool_function(manager, skill_name, tool_name)
 
         with patch.object(
             SkillManager,
-            "find_relevant_executable_tools",
-            return_value=[
-                {
-                    "score": 20,
-                    "full_name": "weather_cn_script.get_weather",
-                    "skill": script_skill,
-                    "tool": script_tool_definition,
-                }
-            ],
-        ), patch.object(
-            SkillManager,
             "get_tool_function",
             new=get_tool_function,
         ):
-            result = await try_lightweight_conversation(state, ScriptSelectingLLM())
+            result = await try_lightweight_conversation(state, FakeLLM())
 
         self.assertEqual(result.get("execution_mode"), "direct")
-        self.assertIn("多云", result.get("final_response", ""))
         tool_names = [str(item.get("name")) for item in result.get("tool_calls", [])]
-        self.assertIn("weather_cn_script.get_weather", tool_names)
-        self.assertNotIn("browser.open_page", tool_names)
+        self.assertIn("browser.open_page", tool_names)
+        self.assertNotIn("weather_cn_script.get_weather", tool_names)
 
     def test_rejects_instruction_reply_that_looks_like_script_path_when_user_did_not_ask_for_commands(self):
         self.assertTrue(
@@ -1694,26 +1650,23 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calculator_record["payload"]["tool_result"]["schema_version"], "serana.tool_result.v1")
 
     @patch("app.api.chat.get_llm_gateway", return_value=FakeGateway())
-    async def test_chat_uses_weather_skill_for_direct_weather_request(self, _gateway):
+    async def test_chat_uses_browser_for_direct_weather_request(self, _gateway):
         original_get_tool_function = SkillManager.get_tool_function
 
-        async def fake_weather_tool(location: str, units: str = "metric"):
-            self.assertEqual(location, "上海")
+        async def fake_browser_open_page(url: str, max_chars: int = 6000):
+            self.assertIn("wttr.in", url)
             return {
                 "source": "wttr.in",
-                "location": "上海",
-                "condition": "多云",
-                "temperature": "26",
-                "feels_like": "28",
-                "humidity": "78",
-                "wind_speed": "12",
-                "units": units,
+                "url": url,
                 "summary": "上海：多云，当前 26度，体感 28度，湿度 78%，风速 12 公里/小时",
+                "content": "上海：多云，当前 26度，体感 28度，湿度 78%，风速 12 公里/小时",
             }
 
         def patched_get_tool_function(self, skill_name: str, tool_name: str):
-            if skill_name == "weather" and tool_name == "get_current_weather":
-                return fake_weather_tool
+            if skill_name == "browser" and tool_name == "open_page":
+                return fake_browser_open_page
+            if skill_name == "weather":
+                raise AssertionError("natural language weather should use browser, not weather skill")
             return original_get_tool_function(self, skill_name, tool_name)
 
         with patch.object(SkillManager, "get_tool_function", new=patched_get_tool_function):
@@ -1726,31 +1679,32 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertEqual(payload["execution_mode"], "direct")
         tool_names = [tool_call["name"] for tool_call in payload["assistant_message"]["tool_calls"]]
-        self.assertIn("weather.get_current_weather", tool_names)
-        self.assertIn("上海", payload["assistant_message"]["content"])
-        self.assertIn("26", payload["assistant_message"]["content"])
+        self.assertIn("browser.open_page", tool_names)
+        browser_call = next(
+            tool_call for tool_call in payload["assistant_message"]["tool_calls"]
+            if tool_call["name"] == "browser.open_page"
+        )
+        self.assertIn("上海", str(browser_call.get("output")))
+        self.assertIn("26", str(browser_call.get("output")))
 
     @patch("app.api.chat.get_llm_gateway", return_value=FakeGateway())
-    async def test_chat_uses_weather_skill_for_beijing_colloquial_request(self, _gateway):
+    async def test_chat_uses_browser_for_beijing_colloquial_weather_request(self, _gateway):
         original_get_tool_function = SkillManager.get_tool_function
 
-        async def fake_weather_tool(location: str, units: str = "metric"):
-            self.assertEqual(location, "北京")
+        async def fake_browser_open_page(url: str, max_chars: int = 6000):
+            self.assertIn("wttr.in", url)
             return {
                 "source": "wttr.in",
-                "location": "北京",
-                "condition": "晴朗",
-                "temperature": "24",
-                "feels_like": "25",
-                "humidity": "45",
-                "wind_speed": "10",
-                "units": units,
+                "url": url,
                 "summary": "北京：晴朗，当前 24度，体感 25度，湿度 45%，风速 10 公里/小时",
+                "content": "北京：晴朗，当前 24度，体感 25度，湿度 45%，风速 10 公里/小时",
             }
 
         def patched_get_tool_function(self, skill_name: str, tool_name: str):
-            if skill_name == "weather" and tool_name == "get_current_weather":
-                return fake_weather_tool
+            if skill_name == "browser" and tool_name == "open_page":
+                return fake_browser_open_page
+            if skill_name == "weather":
+                raise AssertionError("natural language weather should use browser, not weather skill")
             return original_get_tool_function(self, skill_name, tool_name)
 
         with patch.object(SkillManager, "get_tool_function", new=patched_get_tool_function):
@@ -1763,12 +1717,12 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertEqual(payload["execution_mode"], "direct")
         tool_names = [tool_call["name"] for tool_call in payload["assistant_message"]["tool_calls"]]
-        self.assertTrue(
-            "weather.get_current_weather" in tool_names
-            or "serana_contextual_reply" in tool_names
-            or "serana_direct_reply" in tool_names
+        self.assertIn("browser.open_page", tool_names)
+        browser_call = next(
+            tool_call for tool_call in payload["assistant_message"]["tool_calls"]
+            if tool_call["name"] == "browser.open_page"
         )
-        self.assertIn("北京", payload["assistant_message"]["content"])
+        self.assertIn("北京", str(browser_call.get("output")))
 
     @patch("app.api.chat.get_llm_gateway")
     async def test_chat_can_use_browser_search_tool(self, gateway_patch):
@@ -1935,6 +1889,23 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
                 if isinstance(path, str):
                     Path(path).unlink(missing_ok=True)
             cache_path.unlink(missing_ok=True)
+
+    async def test_browser_create_html_preview_empty_cache_probe_does_not_create_blank_page(self):
+        from skills_store.browser import create_html_preview
+
+        cache_path = Path(__file__).resolve().parent / "skills_store" / "browser" / "previews" / "preview-cache.json"
+        cache_path.unlink(missing_ok=True)
+
+        result = await create_html_preview(
+            "快速排序动画演示",
+            "",
+            cache_key="quicksort-empty-cache-probe",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("空白演示", result["summary"])
+        self.assertEqual(result["browser_state"]["status"], "failed")
+        self.assertFalse(cache_path.exists())
 
     async def test_browser_create_html_preview_rejects_placeholder_html(self):
         from skills_store.browser import create_html_preview

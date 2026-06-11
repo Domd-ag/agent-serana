@@ -6,6 +6,8 @@ ARCHIVE_URL="${SERANA_ARCHIVE_URL:-https://codeload.github.com/Domd-ag/agent-ser
 APP_DIR="${SERANA_APP_DIR:-/opt/serana}"
 DATA_DIR="${SERANA_DATA_DIR:-/var/lib/serana}"
 VENV_DIR="${SERANA_VENV_DIR:-$DATA_DIR/venv}"
+SKILLS_DIR="${SERANA_SKILLS_DIR:-$DATA_DIR/skills}"
+BROWSER_DATA_DIR="${SERANA_BROWSER_DATA_DIR:-$DATA_DIR/browser}"
 ENV_DIR="${SERANA_ENV_DIR:-/etc/serana}"
 SERVICE_USER="${SERANA_SERVICE_USER:-serana}"
 SERVICE_NAME="${SERANA_SERVICE_NAME:-serana-backend}"
@@ -74,6 +76,45 @@ ensure_user() {
   useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 }
 
+prepare_persistent_dirs() {
+  mkdir -p \
+    "$DATA_DIR" \
+    "$SKILLS_DIR/installed" \
+    "$SKILLS_DIR/.staging" \
+    "$BROWSER_DATA_DIR/previews" \
+    "$BROWSER_DATA_DIR/downloads" \
+    "$BROWSER_DATA_DIR/screenshots"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$SKILLS_DIR" "$BROWSER_DATA_DIR"
+  chmod 750 "$DATA_DIR" "$SKILLS_DIR" "$BROWSER_DATA_DIR"
+}
+
+migrate_legacy_runtime_data() {
+  local legacy_store="$APP_DIR/backend/skills_store"
+
+  if [ -d "$legacy_store/installed" ]; then
+    log "Migrating legacy installed skills to $SKILLS_DIR/installed"
+    cp -an "$legacy_store/installed/." "$SKILLS_DIR/installed/" 2>/dev/null || true
+  fi
+  if [ -d "$legacy_store/.staging" ]; then
+    log "Migrating legacy staged skills to $SKILLS_DIR/.staging"
+    cp -an "$legacy_store/.staging/." "$SKILLS_DIR/.staging/" 2>/dev/null || true
+  fi
+  if [ -d "$legacy_store/browser/previews" ]; then
+    log "Migrating legacy browser previews to $BROWSER_DATA_DIR/previews"
+    cp -an "$legacy_store/browser/previews/." "$BROWSER_DATA_DIR/previews/" 2>/dev/null || true
+  fi
+  if [ -d "$legacy_store/browser/downloads" ]; then
+    log "Migrating legacy browser downloads to $BROWSER_DATA_DIR/downloads"
+    cp -an "$legacy_store/browser/downloads/." "$BROWSER_DATA_DIR/downloads/" 2>/dev/null || true
+  fi
+  if [ -d "$legacy_store/browser/screenshots" ]; then
+    log "Migrating legacy browser screenshots to $BROWSER_DATA_DIR/screenshots"
+    cp -an "$legacy_store/browser/screenshots/." "$BROWSER_DATA_DIR/screenshots/" 2>/dev/null || true
+  fi
+
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$SKILLS_DIR" "$BROWSER_DATA_DIR"
+}
+
 sync_source() {
   local archive_path extract_dir
   log "Downloading Serana source archive: $ARCHIVE_URL"
@@ -92,9 +133,8 @@ sync_source() {
 }
 
 write_env_file() {
-  mkdir -p "$ENV_DIR" "$DATA_DIR"
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
+  mkdir -p "$ENV_DIR"
+  prepare_persistent_dirs
 
   local env_file="$ENV_DIR/serana.env"
   if [ ! -f "$env_file" ]; then
@@ -112,6 +152,8 @@ SQL_ECHO=false
 CORS_ALLOW_ORIGINS=*
 
 DATABASE_URL=sqlite+aiosqlite:///$DATA_DIR/serana.db
+SERANA_SKILLS_DIR=$SKILLS_DIR
+SERANA_BROWSER_DATA_DIR=$BROWSER_DATA_DIR
 
 SECRET_KEY=$secret_key
 ENCRYPTION_KEY=$encryption_key
@@ -127,6 +169,12 @@ EOF
     chown root:"$SERVICE_USER" "$env_file"
   else
     log "Keeping existing $env_file"
+    if ! grep -q '^SERANA_SKILLS_DIR=' "$env_file"; then
+      printf '\nSERANA_SKILLS_DIR=%s\n' "$SKILLS_DIR" >> "$env_file"
+    fi
+    if ! grep -q '^SERANA_BROWSER_DATA_DIR=' "$env_file"; then
+      printf 'SERANA_BROWSER_DATA_DIR=%s\n' "$BROWSER_DATA_DIR" >> "$env_file"
+    fi
   fi
 }
 
@@ -192,6 +240,8 @@ APP_DIR="$APP_DIR"
 PORT="$PORT"
 PYTHON_BIN="$PYTHON_BIN"
 VENV_DIR="$VENV_DIR"
+SKILLS_DIR="$SKILLS_DIR"
+BROWSER_DATA_DIR="$BROWSER_DATA_DIR"
 
 pause() {
   printf '\n按回车返回菜单...'
@@ -262,7 +312,7 @@ while true; do
     7)
       printf '\n---- 重新部署/更新 ----\n'
       curl -fsSL https://raw.githubusercontent.com/Domd-ag/agent-serana/main/scripts/deploy-linux.sh \\
-        | SERANA_PYTHON_BIN="\$PYTHON_BIN" SERANA_VENV_DIR="\$VENV_DIR" bash
+        | SERANA_PYTHON_BIN="\$PYTHON_BIN" SERANA_VENV_DIR="\$VENV_DIR" SERANA_SKILLS_DIR="\$SKILLS_DIR" SERANA_BROWSER_DATA_DIR="\$BROWSER_DATA_DIR" bash
       show_status
       printf '\n重新部署输出如上。如需查看实时日志，请回到菜单选择 4。\n'
       pause
@@ -297,6 +347,8 @@ print_summary() {
   printf 'Env file:    %s/serana.env\n' "$ENV_DIR"
   printf 'Data dir:    %s\n' "$DATA_DIR"
   printf 'Venv dir:    %s\n' "$VENV_DIR"
+  printf 'Skills dir:  %s\n' "$SKILLS_DIR"
+  printf 'Browser dir: %s\n' "$BROWSER_DATA_DIR"
   printf 'Health:      http://%s:%s/health\n' "${ip:-SERVER_IP}" "$PORT"
   printf 'API docs:    http://%s:%s/docs\n' "${ip:-SERVER_IP}" "$PORT"
   printf 'Autostart:   disabled\n'
@@ -314,6 +366,8 @@ main() {
   cd /
   install_packages
   ensure_user
+  prepare_persistent_dirs
+  migrate_legacy_runtime_data
   sync_source
   write_env_file
   install_python_deps

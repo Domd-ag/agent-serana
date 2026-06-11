@@ -885,6 +885,7 @@ class SkillsViewModel : ViewModel() {
             version = dto.version,
             description = dto.description,
             author = dto.author,
+            runtime = dto.runtime ?: "instruction",
             agentType = dto.agentType,
             maxInstances = dto.maxInstances,
             isEnabled = dto.isEnabled,
@@ -900,6 +901,10 @@ class SkillsViewModel : ViewModel() {
             canUpdate = dto.canUpdate,
             latestVersion = dto.latestVersion,
             updateAvailable = dto.updateAvailable,
+            runModeDescription = dto.runModeDescription.orEmpty(),
+            invocationName = dto.invocationName,
+            invocationParameters = dto.invocationParameters.orEmpty(),
+            invocationExamples = dto.invocationExamples.orEmpty(),
         )
     }
 

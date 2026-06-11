@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 import json
 import inspect
 from pathlib import Path
@@ -7,7 +7,14 @@ import shutil
 from typing import Any, Callable, Dict, List, Optional
 import uuid
 
+from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.skills.invocation import (
+    build_invocation_examples,
+    make_invocation_name,
+    parameter_placeholder,
+    refine_parameters_with_instruction,
+)
 from app.skills.loader import SkillLoader
 from app.skills.models import SkillPackage, SkillPackageManifest, SkillTool
 from app.skills.validator import SkillValidator
@@ -33,14 +40,21 @@ class SkillManager:
             return
 
         backend_root = Path(__file__).resolve().parents[2]
-        self.skills_store_path = backend_root / "skills_store"
-        self.skills_store_path.mkdir(exist_ok=True)
+        settings = get_settings()
+        self.bundled_skills_path = backend_root / "skills_store"
+        configured_skills_dir = str(settings.SERANA_SKILLS_DIR or "").strip()
+        self.skills_store_path = (
+            Path(configured_skills_dir).expanduser()
+            if configured_skills_dir
+            else self.bundled_skills_path
+        )
+        self.skills_store_path.mkdir(parents=True, exist_ok=True)
         self.managed_skills_path = self.skills_store_path / "installed"
-        self.managed_skills_path.mkdir(exist_ok=True)
+        self.managed_skills_path.mkdir(parents=True, exist_ok=True)
         self.staged_uploads_path = self.skills_store_path / ".staging"
         self.staged_uploads_path.mkdir(exist_ok=True)
 
-        self.loader = SkillLoader(str(self.skills_store_path))
+        self.loader = SkillLoader(str(self.bundled_skills_path))
         self.skills: Dict[str, SkillPackage] = {}
         self.enabled_skills: List[str] = []
         self._skills_loaded = False
@@ -61,12 +75,10 @@ class SkillManager:
             self.initialize()
 
     def _scan_skills_store(self):
-        if not self.skills_store_path.exists():
-            return
-
-        for skill_dir in self.skills_store_path.iterdir():
-            if skill_dir.is_dir() and skill_dir.name not in {"installed", ".staging", "__pycache__"}:
-                self._try_load_skill(skill_dir)
+        if self.bundled_skills_path.exists():
+            for skill_dir in self.bundled_skills_path.iterdir():
+                if skill_dir.is_dir() and skill_dir.name not in {"installed", ".staging", "__pycache__"}:
+                    self._try_load_skill(skill_dir)
 
         if self.managed_skills_path.exists():
             for skill_dir in self.managed_skills_path.iterdir():
@@ -103,6 +115,8 @@ class SkillManager:
         can_uninstall = origin == "managed"
         source_label = self._get_source_label(origin, manifest)
         trust_state = self._get_trust_state(origin, manifest)
+        instruction_content = self.loader.load_instruction_content(skill_path, manifest)
+        invocation_metadata = self._build_invocation_metadata(manifest, instruction_content)
 
         skill_package = SkillPackage(
             id=str(uuid.uuid4()),
@@ -125,8 +139,12 @@ class SkillManager:
             trust_state=trust_state,
             effective_scope=manifest.agent_type,
             can_update=can_uninstall and bool(manifest.registry_slug),
+            run_mode_description=invocation_metadata["run_mode_description"],
+            invocation_name=invocation_metadata["invocation_name"],
+            invocation_parameters=invocation_metadata["invocation_parameters"],
+            invocation_examples=invocation_metadata["invocation_examples"],
             manifest=manifest,
-            instruction_content=self.loader.load_instruction_content(skill_path, manifest),
+            instruction_content=instruction_content,
             path=str(skill_path),
         )
 
@@ -134,6 +152,16 @@ class SkillManager:
         self.enabled_skills.append(skill_package.name)
         startup_logger.debug("Loaded skill: %s v%s", skill_package.name, skill_package.version)
         return skill_package
+
+    def list_invocable_executable_skills(self) -> List[SkillPackage]:
+        return [
+            skill
+            for skill in self.skills.values()
+            if skill.is_enabled
+            and skill.runtime in {"python", "script"}
+            and skill.name != "browser"
+            and bool(skill.manifest.tools)
+        ]
 
     def list_skills(self) -> List[SkillPackage]:
         return list(self.skills.values())
@@ -160,94 +188,123 @@ class SkillManager:
             if skill.is_enabled and skill.runtime == "instruction" and skill.instruction_content
         ]
 
-    def find_relevant_executable_tools(
-        self,
-        user_input: str,
-        *,
-        agent_type: str = "serana",
-        max_tools: int = 6,
-    ) -> List[Dict[str, Any]]:
-        """Return installed executable tools whose declared domain matches the request."""
-        query = re.sub(r"\s+", " ", str(user_input or "").strip().lower())
+    def resolve_invocation_skill(self, token: str) -> tuple[Optional[SkillPackage], List[SkillPackage]]:
+        query = re.sub(r"[^a-zA-Z0-9_.-]+", "", str(token or "").strip().lower())
         if not query:
-            return []
+            return None, []
 
-        matches: List[Dict[str, Any]] = []
-        for skill in self.skills.values():
-            if not skill.is_enabled or skill.runtime == "instruction" or not skill.manifest.tools:
-                continue
-            if skill.name == "browser":
-                continue
-            if skill.agent_type not in {"all", agent_type}:
-                continue
+        candidates = self.list_invocable_executable_skills()
+        exact = [
+            skill for skill in candidates
+            if skill.name.lower() == query or str(skill.invocation_name or "").lower() == query
+        ]
+        if len(exact) == 1:
+            return exact[0], exact
 
-            capability_score = sum(
-                12
-                for value in skill.manifest.capabilities
-                if str(value).strip().lower() in query
-            )
-            intent_score = sum(
-                16
-                for value in skill.manifest.intents
-                if str(value).strip().lower() in query
-            )
-            skill_tokens = self._relevance_tokens(
-                skill.name,
-                skill.description,
-                skill.manifest.registry_slug or "",
-            )
+        prefix = [
+            skill for skill in candidates
+            if skill.name.lower().startswith(query)
+            or str(skill.invocation_name or "").lower().startswith(query)
+            or str(skill.registry_slug or "").lower().startswith(query)
+        ]
+        if len(prefix) == 1:
+            return prefix[0], prefix
+        return None, prefix
 
-            for tool in skill.manifest.tools:
-                score = capability_score + intent_score
-                tool_tokens = self._relevance_tokens(tool.name, tool.description)
-                score += sum(3 for token in skill_tokens if token in query)
-                score += sum(5 for token in tool_tokens if token in query)
-                if score <= 0:
-                    continue
-                matches.append(
-                    {
-                        "score": score,
-                        "full_name": f"{skill.name}.{tool.name}",
-                        "skill": skill,
-                        "tool": tool,
-                    }
-                )
+    @classmethod
+    def _build_invocation_metadata(
+        cls,
+        manifest: SkillPackageManifest,
+        instruction_content: str | None,
+    ) -> Dict[str, Any]:
+        if manifest.runtime == "instruction":
+            return {
+                "run_mode_description": (
+                    "这是 instruction 技能：启用后会作为 Serana 的对话提示参与回答，"
+                    "不会在聊天中被当作脚本直接执行。"
+                ),
+                "invocation_name": None,
+                "invocation_parameters": [],
+                "invocation_examples": [],
+            }
 
-        matches.sort(key=lambda item: (-int(item["score"]), str(item["full_name"])))
-        return matches[:max_tools]
+        if manifest.runtime not in {"python", "script"} or not manifest.tools:
+            return {
+                "run_mode_description": "该技能暂未声明可在聊天中直接调用的工具。",
+                "invocation_name": None,
+                "invocation_parameters": [],
+                "invocation_examples": [],
+            }
+
+        tool = manifest.tools[0]
+        parameters = refine_parameters_with_instruction(
+            cls._ordered_tool_parameters(manifest, tool),
+            instruction_content or "",
+        )
+        invocation_name = make_invocation_name(manifest.name)
+        examples = build_invocation_examples(
+            instruction_content or "",
+            invocation_name=invocation_name,
+            entrypoint_names=cls._entrypoint_names(manifest),
+            parameters=parameters,
+            max_examples=4,
+        )
+        adapter = ""
+        if manifest.runtime == "script" and manifest.script:
+            adapter = f" ({manifest.script.adapter})"
+        return {
+            "run_mode_description": (
+                f"这是 {manifest.runtime}{adapter} 技能：普通自然语言不会自动触发；"
+                f"请在聊天框使用 @{invocation_name} 参数... 显式调用。"
+            ),
+            "invocation_name": invocation_name,
+            "invocation_parameters": parameters,
+            "invocation_examples": examples,
+        }
 
     @staticmethod
-    def _relevance_tokens(*values: str) -> set[str]:
-        stopwords = {
-            "skill",
-            "tool",
-            "agent",
-            "assistant",
-            "一个",
-            "使用",
-            "支持",
-            "工具",
-            "技能",
-            "查询",
-            "获取",
-            "用于",
-        }
-        tokens: set[str] = set()
-        for value in values:
-            normalized = str(value or "").strip().lower()
-            tokens.update(
-                token
-                for token in re.findall(r"[a-z][a-z0-9_-]{2,}", normalized)
-                if token not in stopwords
+    def _ordered_tool_parameters(
+        manifest: SkillPackageManifest,
+        tool: SkillTool,
+    ) -> List[Dict[str, Any]]:
+        schema = tool.input_schema
+        properties = dict(schema.properties or {})
+        configured_order = []
+        if manifest.script and manifest.script.argument_order:
+            configured_order = list(manifest.script.argument_order)
+        ordered_names = [
+            name for name in [*configured_order, *schema.required, *properties.keys()]
+            if name in properties or name in schema.required
+        ]
+        ordered_names = list(dict.fromkeys(ordered_names))
+        parameters = []
+        for name in ordered_names:
+            raw_property = properties.get(name) or {}
+            required = name in set(schema.required or [])
+            parameters.append(
+                {
+                    "name": name,
+                    "type": str(raw_property.get("type") or "string"),
+                    "description": str(raw_property.get("description") or ""),
+                    "required": required,
+                }
             )
-            for token in re.findall(r"[\u4e00-\u9fff]{2,}", normalized):
-                max_window = min(len(token), 4)
-                for window in range(2, max_window + 1):
-                    for start in range(len(token) - window + 1):
-                        piece = token[start : start + window]
-                        if piece not in stopwords:
-                            tokens.add(piece)
-        return tokens
+        return parameters
+
+    @staticmethod
+    def _parameter_placeholder(parameter: Dict[str, Any]) -> str:
+        return parameter_placeholder(parameter)
+
+    @staticmethod
+    def _entrypoint_names(manifest: SkillPackageManifest) -> List[str]:
+        names = [manifest.name]
+        if manifest.registry_slug:
+            names.append(manifest.registry_slug)
+        if manifest.entrypoint:
+            entrypoint = Path(manifest.entrypoint)
+            names.extend([entrypoint.name, entrypoint.stem])
+        names.extend(tool.name for tool in manifest.tools)
+        return list(dict.fromkeys(name for name in names if name))
 
     def enable_skill(self, skill_name: str) -> bool:
         if skill_name not in self.skills:
@@ -309,7 +366,7 @@ class SkillManager:
         if skill_path.exists():
             shutil.rmtree(skill_path)
 
-        fallback_path = self.skills_store_path / skill_name
+        fallback_path = self.bundled_skills_path / skill_name
         if fallback_path.exists() and fallback_path.is_dir():
             self._try_load_skill(fallback_path)
 

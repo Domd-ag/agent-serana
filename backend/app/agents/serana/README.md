@@ -107,15 +107,16 @@ serana/
 
 ## Skill 接入优先级
 
-- 第一优先级：本地可执行 skill
-  `runtime=python` 或受控 `runtime=script` 且声明了 `tools` 的 skill，会作为真实工具参与 direct tool route，由统一 executor 执行。
-  Serana 会先按能力标签、意图、工具描述筛选相关可执行 Skill，再让 LLM 在候选工具中选择并生成 schema 参数；这一步位于 Browser 快捷兜底之前。
-  天气请求会先确定性匹配已安装的可执行天气 skill，包括 SkillHub 下载的 `weather-cn-pro` 一类脚本技能；“后天天气”这类短跟进会先从最近天气上下文继承城市，再尝试本地 skill，只有未命中时才进入 browser / wttr 兜底。
-  明确算术表达式会先尝试 `calculator` skill；如果当前设备没有安装 calculator，Serana 会使用内置确定性算术兜底，并仍按统一 `tool_result` 协议记录结果。
-- 第二优先级：相关 instruction skill
-  `runtime=instruction` 的 skill 不直接执行，但会按当前问题挑选相关 skill，把 `SKILL.md` 作为回答和规划指导。
-- 第三优先级：浏览器与网页兜底
-  只有本地 skill 不命中，或用户明确要求上网搜、用浏览器、打开网页时，才进入 browser 工具链。
+- 普通自然语言不会自动触发 `runtime=python` 或 `runtime=script` 技能。
+  这类技能只通过聊天框里的显式命令调用：`@skill_name 参数...`。API 层会在进入 Serana loop 之前解析命令、校验参数、调用对应工具，并把结果作为助手回复返回。
+- `runtime=instruction` 技能会自动参与 Serana。
+  安装并启用后，它的 `SKILL.md` 会按 `capabilities`、`intents`、名称和描述做相关性筛选，然后注入当前轮 prompt。它不会被当成脚本执行，也不会要求用户输入 `@`。
+- 天气自然语言请求直接走浏览器链路。
+  比如“上海天气如何”“明天北京会下雨吗”会进入 `browser.open_page` / observe / summarize，不再优先调用已安装的天气脚本技能。若用户明确想执行某个天气脚本，应使用 `@weather_cn_pro 上海` 这类显式调用。
+- 内置安全直达工具仍保留。
+  明确算术、时间、记忆保存/检索等系统内置能力继续走 direct tool executor；它们不属于 SkillHub 下载的 python/script 技能自动命中。
+- Browser 仍是网页、实时搜索和 HTML preview 的统一入口。
+  上网搜索、打开页面、网页观察、截图、下载列表和交互式演示预览都从 browser 工具链进入。
 
 ## 回复风格
 
@@ -131,6 +132,7 @@ serana/
 
 - browser.create_html_preview 由 nodes.py 先做轻量路由，再调用 LLM 现场生成自包含 HTML。
 - 生成结果会检查占位代码、交互脚本和控件事件绑定，避免出现空白页或按钮无响应的演示页。
+- 复用缓存前只能做无副作用探测；缓存未命中时必须继续现场生成，不能把空 HTML 写成新的预览页。
 
 ## 浏览器执行链
 

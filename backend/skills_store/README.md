@@ -24,7 +24,9 @@ skills_store/
 
 ## 运行产物
 
-`browser/previews/` 保存 HTML 演示缓存，属于本地运行产物并由 `.gitignore` 忽略。
+本地开发时，`browser/previews/` 保存 HTML 演示缓存，属于本地运行产物并由 `.gitignore` 忽略。
+Linux 部署时，`SERANA_BROWSER_DATA_DIR` 默认指向 `/var/lib/serana/browser`，预览、下载和截图会写到持久目录，升级源码不会删除。
+HTML 预览缓存只在已经生成过有效页面时复用；空缓存探测不能写入空白页面或缓存索引。
 
 ## 维护约定
 

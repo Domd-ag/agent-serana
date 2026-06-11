@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.skills.invocation import infer_parameters_from_instruction
 from app.skills.script_runtime import ShellScriptAdapter
 from app.skills.validator import SkillValidator
 
@@ -54,6 +55,7 @@ class SkillStandardizer:
         if shell_entrypoint is not None:
             manifest = cls._build_shell_manifest(
                 skill_dir,
+                instruction=instruction,
                 shell_entrypoint=shell_entrypoint,
                 local_name=local_name,
                 version=version,
@@ -141,6 +143,7 @@ class SkillStandardizer:
         cls,
         skill_dir: Path,
         *,
+        instruction: str,
         shell_entrypoint: Path,
         local_name: str,
         version: str,
@@ -165,6 +168,28 @@ class SkillStandardizer:
             permissions.append("filesystem_write")
         relative_entrypoint = shell_entrypoint.relative_to(skill_dir.resolve()).as_posix()
         tool_name = cls._sanitize_tool_name(shell_entrypoint.stem)
+        inferred_parameters = infer_parameters_from_instruction(
+            instruction,
+            entrypoint_names=[
+                shell_entrypoint.name,
+                shell_entrypoint.stem,
+                local_name,
+                registry_slug,
+            ],
+        )
+        argument_order = [str(parameter["name"]) for parameter in inferred_parameters]
+        properties = {
+            str(parameter["name"]): {
+                "type": str(parameter.get("type") or "string"),
+                "description": str(parameter.get("description") or ""),
+            }
+            for parameter in inferred_parameters
+        }
+        required = [
+            str(parameter["name"])
+            for parameter in inferred_parameters
+            if bool(parameter.get("required", True))
+        ]
         return {
             "name": local_name,
             "version": version,
@@ -186,7 +211,7 @@ class SkillStandardizer:
                 "timeout_seconds": 20,
                 "max_input_chars": 8192,
                 "max_output_chars": 32768,
-                "argument_order": ["query"],
+                "argument_order": argument_order,
                 "output_format": "text",
             },
             "tools": [
@@ -195,13 +220,8 @@ class SkillStandardizer:
                     "description": description,
                     "input_schema": {
                         "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "用户请求中需要交给技能处理的主要对象或查询内容",
-                            }
-                        },
-                        "required": ["query"],
+                        "properties": properties,
+                        "required": required,
                     },
                 }
             ],

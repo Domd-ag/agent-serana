@@ -4,20 +4,29 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from app.core.config import get_settings
+
 
 router = APIRouter(prefix="/browser", tags=["browser"])
 
 
+def _browser_data_dir() -> Path:
+    configured = str(get_settings().SERANA_BROWSER_DATA_DIR or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[2] / "skills_store" / "browser"
+
+
 def _screenshots_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "skills_store" / "browser" / "screenshots"
+    return _browser_data_dir() / "screenshots"
 
 
 def _previews_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "skills_store" / "browser" / "previews"
+    return _browser_data_dir() / "previews"
 
 
 def _downloads_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "skills_store" / "browser" / "downloads"
+    return _browser_data_dir() / "downloads"
 
 
 def _resolve_plain_file(root: Path, filename: str, expected_suffix: str | None = None) -> Path:

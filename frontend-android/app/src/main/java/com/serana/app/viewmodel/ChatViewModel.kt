@@ -57,6 +57,22 @@ data class ChatDebugSummary(
     val recentTimeline: List<ChatDebugTimelineEntry> = emptyList(),
 )
 
+data class SkillInvocationSuggestion(
+    val name: String,
+    val runtime: String,
+    val description: String?,
+    val parameterCount: Int,
+    val example: String,
+    val parameters: List<SkillInvocationParameter> = emptyList(),
+)
+
+data class SkillInvocationParameter(
+    val name: String,
+    val description: String,
+    val required: Boolean,
+    val example: String?,
+)
+
 class ChatViewModel : ViewModel() {
     private val _messages = MutableStateFlow(
         listOf(
@@ -96,6 +112,10 @@ class ChatViewModel : ViewModel() {
     private val _isSubmittingApproval = MutableStateFlow(false)
     val isSubmittingApproval: StateFlow<Boolean> = _isSubmittingApproval.asStateFlow()
 
+    private val _skillInvocationSuggestions = MutableStateFlow<List<SkillInvocationSuggestion>>(emptyList())
+    val skillInvocationSuggestions: StateFlow<List<SkillInvocationSuggestion>> =
+        _skillInvocationSuggestions.asStateFlow()
+
     private var currentSessionId: String? = null
     private val messageUpdateMutex = Mutex()
     private var activeStreamJob: Job? = null
@@ -108,6 +128,63 @@ class ChatViewModel : ViewModel() {
 
     init {
         refreshSessions()
+        refreshSkillInvocationSuggestions()
+    }
+
+    fun refreshSkillInvocationSuggestions() {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.getSkills()
+                }
+                if (response.isSuccessful) {
+                    _skillInvocationSuggestions.value = response.body().orEmpty()
+                        .filter { dto ->
+                            val runtime = (dto.runtime ?: "").lowercase()
+                            dto.isEnabled &&
+                                (runtime == "python" || runtime == "script") &&
+                                dto.name != "browser" &&
+                                dto.invocationName != null
+                        }
+                        .map { dto ->
+                            val name = dto.invocationName ?: dto.name
+                            val invocationParameters = dto.invocationParameters.orEmpty()
+                            val invocationExamples = dto.invocationExamples.orEmpty()
+                            val parameters = invocationParameters.mapIndexed { index, parameter ->
+                                SkillInvocationParameter(
+                                    name = (parameter["name"] as? String)
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: "参数${index + 1}",
+                                    description = (parameter["description"] as? String).orEmpty(),
+                                    required = parameter["required"] as? Boolean ?: true,
+                                    example = parameter["example"] as? String,
+                                )
+                            }
+                            val parameterCount = invocationParameters.count { parameter ->
+                                parameter["required"] as? Boolean ?: true
+                            }.takeIf { it > 0 } ?: invocationParameters.size
+                            SkillInvocationSuggestion(
+                                name = name,
+                                runtime = dto.runtime ?: "script",
+                                description = dto.description,
+                                parameterCount = parameterCount,
+                                example = invocationExamples.firstOrNull()
+                                    ?: buildString {
+                                        append("@")
+                                        append(name)
+                                        if (parameterCount > 0) {
+                                            append(" ")
+                                            append(List(parameterCount) { "<参数${it + 1}>" }.joinToString(" "))
+                                        }
+                                    },
+                                parameters = parameters,
+                            )
+                        }
+                }
+            } catch (_: Exception) {
+                _skillInvocationSuggestions.value = emptyList()
+            }
+        }
     }
 
     fun refreshSessions() {

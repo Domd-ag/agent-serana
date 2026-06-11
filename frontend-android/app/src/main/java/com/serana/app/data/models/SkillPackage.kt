@@ -6,6 +6,7 @@ data class SkillPackage(
     val version: String,
     val description: String?,
     val author: String?,
+    val runtime: String,
     val agentType: String,
     val maxInstances: Int,
     val isEnabled: Boolean,
@@ -21,6 +22,10 @@ data class SkillPackage(
     val canUpdate: Boolean,
     val latestVersion: String?,
     val updateAvailable: Boolean,
+    val runModeDescription: String,
+    val invocationName: String?,
+    val invocationParameters: List<Map<String, Any?>>,
+    val invocationExamples: List<String>,
 )
 
 data class SkillTool(

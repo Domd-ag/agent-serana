@@ -322,6 +322,7 @@ data class SkillPackageDto(
     val version: String,
     val description: String? = null,
     val author: String? = null,
+    val runtime: String? = null,
     @SerializedName("agent_type")
     val agentType: String,
     @SerializedName("max_instances")
@@ -351,6 +352,14 @@ data class SkillPackageDto(
     val latestVersion: String? = null,
     @SerializedName("update_available")
     val updateAvailable: Boolean = false,
+    @SerializedName("run_mode_description")
+    val runModeDescription: String? = null,
+    @SerializedName("invocation_name")
+    val invocationName: String? = null,
+    @SerializedName("invocation_parameters")
+    val invocationParameters: List<Map<String, Any?>>? = null,
+    @SerializedName("invocation_examples")
+    val invocationExamples: List<String>? = null,
 )
 
 data class SkillLifecycleStatusDto(

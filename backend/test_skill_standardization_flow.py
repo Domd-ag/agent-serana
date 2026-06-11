@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from app.core.config import get_settings
 from app.skills.loader import SkillLoader
 from app.skills.manager import SkillManager
 from app.skills.models import MarketplaceSkillDetail
@@ -18,6 +19,14 @@ def _build_skill_archive(script: str) -> bytes:
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("sample/SKILL.md", "# Sample Query\n\n使用：`./query.sh 内容`\n")
         archive.writestr("sample/query.sh", script)
+    return buffer.getvalue()
+
+
+def _build_skill_archive_with_docs(skill_md: str, script: str, script_name: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("sample/SKILL.md", skill_md)
+        archive.writestr(f"sample/{script_name}", script)
     return buffer.getvalue()
 
 
@@ -49,6 +58,26 @@ def _detail() -> MarketplaceSkillDetail:
 
 
 class SkillStandardizationFlowTests(unittest.TestCase):
+    def test_skill_manager_uses_configured_persistent_skill_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with patch.dict("os.environ", {"SERANA_SKILLS_DIR": str(root)}):
+                get_settings.cache_clear()
+                SkillManager._instance = None
+                SkillManager._initialized = False
+                try:
+                    manager = SkillManager()
+                    manager.initialize()
+
+                    self.assertEqual(manager.skills_store_path, root)
+                    self.assertEqual(manager.managed_skills_path, root / "installed")
+                    self.assertIn("browser", manager.skills)
+                    self.assertNotIn(str(root), manager.skills["browser"].path)
+                finally:
+                    SkillManager._instance = None
+                    SkillManager._initialized = False
+                    get_settings.cache_clear()
+
     def test_skillhub_download_standardizes_and_registers_safe_shell_skill(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = _isolated_manager(Path(temp_dir))
@@ -66,6 +95,57 @@ class SkillStandardizationFlowTests(unittest.TestCase):
             self.assertEqual(skill.manifest.script.adapter, "shell")
             self.assertIsNotNone(manager.get_tool_function(skill.name, "query"))
             self.assertTrue((manager.managed_skills_path / skill.name / "skill.json").is_file())
+
+    def test_skillhub_shell_skill_infers_invocation_protocol_from_quick_start(self):
+        skill_md = """# Weather CN Pro
+
+## Quick Start
+
+```bash
+./weather-cn-pro.sh 上海
+./weather-cn-pro.sh 北京 3
+```
+
+| 参数 | 说明 | 必填 |
+| --- | --- | --- |
+| city | 城市名称，例如 上海 | 是 |
+| days | 预报天数，例如 3 | 否 |
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = _isolated_manager(Path(temp_dir))
+            client = SkillHubClient()
+            detail = MarketplaceSkillDetail(
+                slug="weather-cn-pro",
+                display_name="Weather CN Pro",
+                summary="中文天气脚本",
+                owner_handle="tester",
+                owner_display_name="Tester",
+                latest_version="1.0.0",
+                canonical_url="https://skillhub.cn/skills/weather-cn-pro",
+                download_url="https://api.skillhub.cn/api/v1/download?slug=weather-cn-pro",
+            )
+            archive = _build_skill_archive_with_docs(
+                skill_md,
+                "#!/bin/bash\necho \"$1 $2\"\n",
+                "weather-cn-pro.sh",
+            )
+
+            with (
+                patch.object(client, "get_skill_detail", return_value=detail),
+                patch.object(client, "_http_get_bytes", return_value=archive),
+                patch.object(ShellScriptAdapter, "find_bash", return_value=Path("C:/fake/bash.exe")),
+            ):
+                skill = client.install_skill("weather-cn-pro", manager)
+
+            self.assertEqual(skill.runtime, "script")
+            self.assertEqual(skill.invocation_name, "weather_cn_pro")
+            self.assertEqual(skill.manifest.script.argument_order, ["city", "days"])
+            tool = skill.manifest.tools[0]
+            self.assertEqual(tool.input_schema.required, ["city"])
+            self.assertIn("城市", tool.input_schema.properties["city"]["description"])
+            self.assertIn("天数", tool.input_schema.properties["days"]["description"])
+            self.assertIn("@weather_cn_pro 上海", skill.invocation_examples)
+            self.assertIn("@weather_cn_pro 北京 3", skill.invocation_examples)
 
     def test_skillhub_download_rejects_dangerous_shell_skill_without_residue(self):
         with tempfile.TemporaryDirectory() as temp_dir:
