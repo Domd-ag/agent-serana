@@ -80,6 +80,8 @@ def parameter_placeholder(parameter: dict[str, Any]) -> str:
         value = "<文件路径>"
     elif lowered in {"days", "count", "limit", "num", "number"}:
         value = "3"
+    elif lowered in {"cuisine", "food_type", "category"}:
+        value = "<cuisine>"
     elif lowered in {"keyword", "query", "q", "topic", "text", "input", "prompt"}:
         value = f"<{name}>"
     else:
@@ -328,12 +330,19 @@ def _parse_command_line(
         return None
     first = _command_basename(tokens[0]).lower()
     if first in INSTALL_COMMANDS and first not in SHELL_LAUNCHERS:
-        return None
+        is_python_entrypoint = first in {"python", "python3", "py"} and len(tokens) > 1 and _matches_entrypoint(
+            tokens[1],
+            entrypoint_names,
+        )
+        if not is_python_entrypoint:
+            return None
 
     command_index = None
     if tokens[0].startswith("@"):
         command_index = 0
     elif first in SHELL_LAUNCHERS and len(tokens) > 1 and _matches_entrypoint(tokens[1], entrypoint_names):
+        command_index = 1
+    elif first in {"python", "python3", "py"} and len(tokens) > 1 and _matches_entrypoint(tokens[1], entrypoint_names):
         command_index = 1
     elif _matches_entrypoint(tokens[0], entrypoint_names):
         command_index = 0
@@ -416,7 +425,7 @@ def _parameter_from_argument(argument: str, index: int) -> tuple[str, bool, str]
     if lowered in {"keyword", "query", "topic", "关键词", "查询", "主题"}:
         return "query", required, f"<{cleaned}>"
     if re.search(r"[\u4e00-\u9fff]", cleaned) and len(cleaned) <= 12:
-        return "city", required, cleaned
+        return ("city" if index == 0 else "cuisine", required, cleaned)
     return ("query" if index == 0 else f"arg{index + 1}", required, cleaned)
 
 

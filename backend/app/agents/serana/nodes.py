@@ -1535,6 +1535,33 @@ def _is_html_preview_modification_request(user_input: str) -> bool:
     return any(term in raw_text or term in lowered for term in modification_terms)
 
 
+def _is_html_preview_reuse_request(user_input: str) -> bool:
+    raw_text = str(user_input or "").strip()
+    lowered = raw_text.lower()
+    if not raw_text:
+        return False
+    reuse_terms = (
+        "之前",
+        "以前",
+        "上次",
+        "刚才",
+        "原来",
+        "旧的",
+        "打开之前",
+        "打开上次",
+        "打开刚才",
+        "之前生成",
+        "上次生成",
+        "以前生成",
+        "previous",
+        "last time",
+        "before",
+        "reuse",
+        "cached",
+    )
+    return any(term in raw_text or term in lowered for term in reuse_terms)
+
+
 def _html_preview_context_text(state: dict[str, Any] | None) -> str:
     if not state:
         return ""
@@ -1669,16 +1696,20 @@ def _html_preview_request_cache_key(user_input: str) -> str:
 
 
 def _html_preview_should_reuse_cache(user_input: str) -> bool:
-    return not _is_html_preview_modification_request(user_input)
+    return _is_html_preview_reuse_request(user_input) and not _is_html_preview_modification_request(user_input)
 
 
 def _resolve_html_preview_shortcut_intent(
     user_input: str,
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    original_user_input = str((state or {}).get("original_user_input") or "").strip()
+    modification_source_text = "\n".join(
+        text for text in (user_input, original_user_input) if str(text or "").strip()
+    )
     is_preview_request = _is_html_preview_request(user_input)
     is_modification_followup = (
-        _is_html_preview_modification_request(user_input)
+        _is_html_preview_modification_request(modification_source_text)
         and _has_recent_html_preview_context(state)
     )
     if not (is_preview_request or is_modification_followup):
@@ -1703,6 +1734,7 @@ def _resolve_html_preview_shortcut_intent(
         "<p id=\"status\">\u7528\u52a8\u753b\u5c55\u793a\u5173\u952e\u6b65\u9aa4\u3002</p>"
         "</section>"
     )
+    should_reuse_cache = _html_preview_should_reuse_cache(modification_source_text)
     cache_key = _html_preview_request_cache_key(subject_text)
     generation_request = user_input
     if is_modification_followup:
@@ -1723,6 +1755,7 @@ def _resolve_html_preview_shortcut_intent(
         "generation_request": generation_request,
         "modify_existing_preview": is_modification_followup,
         "preview_context": context_text,
+        "reuse_cache": should_reuse_cache,
     }
 
 
@@ -4290,6 +4323,7 @@ async def _execute_resolved_direct_tool_intent(
     if planned_tool_name == "browser.create_html_preview":
         generation_user_input = str(tool_intent.get("generation_request") or user_input)
         modify_existing_preview = bool(tool_intent.get("modify_existing_preview") or False)
+        reuse_cache = bool(tool_intent.get("reuse_cache") or False)
         preview_context = str(tool_intent.get("preview_context") or "")
         cache_key = str(planned_args.get("cache_key") or "").strip()
         existing_preview_html = ""
@@ -4298,7 +4332,7 @@ async def _execute_resolved_direct_tool_intent(
                 cache_key=cache_key,
                 context_text=preview_context,
             )
-        if cache_key and not modify_existing_preview:
+        if cache_key and reuse_cache and not modify_existing_preview:
             cached_args = {
                 "title": str(planned_args.get("title") or "Serana \u6f14\u793a"),
                 "html": "",

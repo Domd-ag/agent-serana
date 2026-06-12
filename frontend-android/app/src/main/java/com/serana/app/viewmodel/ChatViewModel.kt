@@ -141,9 +141,13 @@ class ChatViewModel : ViewModel() {
                     _skillInvocationSuggestions.value = response.body().orEmpty()
                         .filter { dto ->
                             val runtime = (dto.runtime ?: "").lowercase()
+                            val skillName = dto.name.lowercase()
+                            val invocationName = dto.invocationName?.lowercase()
                             dto.isEnabled &&
                                 (runtime == "python" || runtime == "script") &&
-                                dto.name != "browser" &&
+                                skillName != "browser" &&
+                                skillName != "memory_manager" &&
+                                invocationName != "memory_manager" &&
                                 dto.invocationName != null
                         }
                         .map { dto ->

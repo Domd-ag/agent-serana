@@ -11,7 +11,7 @@ class SkillValidator:
 
     PACKAGE_METADATA_FILE = "skill.json"
     SUPPORTED_RUNTIMES = {"python", "instruction", "script"}
-    SUPPORTED_SCRIPT_ADAPTERS = {"python", "shell"}
+    SUPPORTED_SCRIPT_ADAPTERS = {"python", "python_cli", "shell"}
     SUPPORTED_SCRIPT_PERMISSIONS = {"network", "filesystem_write"}
 
     @classmethod
@@ -41,7 +41,7 @@ class SkillValidator:
                     return False, "Script Skill 必须声明 script 配置"
                 if script.adapter not in cls.SUPPORTED_SCRIPT_ADAPTERS:
                     return False, f"不支持的 Script Skill adapter：{script.adapter}"
-                if script.adapter == "python" and not manifest.entrypoint.lower().endswith(".py"):
+                if script.adapter in {"python", "python_cli"} and not manifest.entrypoint.lower().endswith(".py"):
                     return False, "PythonScriptAdapter 入口必须是 .py 文件"
                 if script.adapter == "shell" and not manifest.entrypoint.lower().endswith(".sh"):
                     return False, "ShellScriptAdapter 入口必须是 .sh 文件"

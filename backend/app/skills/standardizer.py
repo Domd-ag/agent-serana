@@ -32,7 +32,8 @@ class SkillStandardizer:
         instruction_path = skill_dir / "SKILL.md"
         if not instruction_path.is_file():
             raise SkillStandardizationError("下载的技能包缺少 SKILL.md。")
-        instruction = instruction_path.read_text(encoding="utf-8", errors="replace")
+        instruction = cls._read_combined_instruction(skill_dir, instruction_path)
+        instruction_file = cls._write_combined_instruction_if_needed(skill_dir, instruction_path, instruction)
 
         existing_manifest = cls._read_existing_manifest(skill_dir)
         if existing_manifest and cls._is_declared_executable_manifest(existing_manifest):
@@ -52,11 +53,28 @@ class SkillStandardizer:
             return manifest
 
         shell_entrypoint = cls._find_shell_entrypoint(skill_dir, instruction)
+        python_cli_entrypoint = None if shell_entrypoint is not None else cls._find_python_cli_entrypoint(skill_dir, instruction)
         if shell_entrypoint is not None:
             manifest = cls._build_shell_manifest(
                 skill_dir,
                 instruction=instruction,
+                instruction_file=instruction_file,
                 shell_entrypoint=shell_entrypoint,
+                local_name=local_name,
+                version=version,
+                description=description,
+                author=author,
+                registry_slug=registry_slug,
+                source_url=source_url,
+                capabilities=capabilities,
+                intents=intents,
+            )
+        elif python_cli_entrypoint is not None:
+            manifest = cls._build_python_cli_manifest(
+                skill_dir,
+                instruction=instruction,
+                instruction_file=instruction_file,
+                python_entrypoint=python_cli_entrypoint,
                 local_name=local_name,
                 version=version,
                 description=description,
@@ -68,6 +86,7 @@ class SkillStandardizer:
             )
         else:
             manifest = cls._build_instruction_manifest(
+                instruction_file=instruction_file,
                 local_name=local_name,
                 version=version,
                 description=description,
@@ -92,6 +111,24 @@ class SkillStandardizer:
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
+    def _read_combined_instruction(skill_dir: Path, instruction_path: Path) -> str:
+        parts = [instruction_path.read_text(encoding="utf-8", errors="replace")]
+        for name in ("QUICKSTART.md", "README.md"):
+            path = skill_dir / name
+            if path.is_file() and path != instruction_path:
+                parts.append(f"\n\n## {name}\n\n{path.read_text(encoding='utf-8', errors='replace')}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _write_combined_instruction_if_needed(skill_dir: Path, instruction_path: Path, instruction: str) -> str:
+        original = instruction_path.read_text(encoding="utf-8", errors="replace")
+        if instruction.strip() == original.strip():
+            return instruction_path.name
+        combined_path = skill_dir / "SERANA_SKILL.md"
+        combined_path.write_text(instruction, encoding="utf-8")
+        return combined_path.name
+
+    @staticmethod
     def _is_declared_executable_manifest(payload: dict[str, Any]) -> bool:
         runtime = str(payload.get("runtime") or "").lower()
         if runtime not in {"python", "script"}:
@@ -105,6 +142,8 @@ class SkillStandardizer:
         for match in re.finditer(r"(?:^|[\s`'\"])(?:\./)?([a-zA-Z0-9_./-]+\.sh)\b", instruction):
             candidate = (skill_dir / match.group(1)).resolve()
             if candidate.is_file() and candidate.suffix.lower() == ".sh":
+                if candidate.name.lower() in {"setup.sh", "install.sh", "publish.sh", "deploy.sh"}:
+                    continue
                 try:
                     candidate.relative_to(skill_dir.resolve())
                 except ValueError:
@@ -119,10 +158,40 @@ class SkillStandardizer:
         if unique_references:
             return unique_references[0]
 
-        shell_files = sorted(path.resolve() for path in skill_dir.rglob("*.sh") if path.is_file())
+        shell_files = sorted(
+            path.resolve()
+            for path in skill_dir.rglob("*.sh")
+            if path.is_file() and path.name.lower() not in {"setup.sh", "install.sh", "publish.sh", "deploy.sh"}
+        )
         if len(shell_files) > 1:
             return None
         return shell_files[0] if shell_files else None
+
+    @staticmethod
+    def _find_python_cli_entrypoint(skill_dir: Path, instruction: str) -> Path | None:
+        candidates: list[Path] = []
+        for match in re.finditer(r"(?:^|[\s`'\"])(?:python3?|py)\s+([a-zA-Z0-9_./-]+\.py)\b", instruction):
+            candidate = (skill_dir / match.group(1)).resolve()
+            if not candidate.is_file() or candidate.suffix.lower() != ".py":
+                continue
+            try:
+                candidate.relative_to(skill_dir.resolve())
+            except ValueError:
+                continue
+            name = candidate.name.lower()
+            if name.startswith("test_") or name in {"setup.py", "session_manager.py"}:
+                continue
+            candidates.append(candidate)
+
+        unique_candidates = list(dict.fromkeys(candidates))
+        if unique_candidates:
+            preferred = [
+                candidate
+                for candidate in unique_candidates
+                if any(token in candidate.stem.lower() for token in ("real", "main", "crosscheck", "run", "cli"))
+            ]
+            return (preferred or unique_candidates)[0]
+        return None
 
     @staticmethod
     def _validate_declared_runtime(skill_dir: Path, manifest: dict[str, Any]) -> None:
@@ -144,6 +213,7 @@ class SkillStandardizer:
         skill_dir: Path,
         *,
         instruction: str,
+        instruction_file: str,
         shell_entrypoint: Path,
         local_name: str,
         version: str,
@@ -197,7 +267,7 @@ class SkillStandardizer:
             "author": author,
             "format": "serana_standardized",
             "runtime": "script",
-            "instruction_file": "SKILL.md",
+            "instruction_file": instruction_file,
             "entrypoint": relative_entrypoint,
             "registry_slug": registry_slug,
             "source_url": source_url,
@@ -227,9 +297,94 @@ class SkillStandardizer:
             ],
         }
 
+    @classmethod
+    def _build_python_cli_manifest(
+        cls,
+        skill_dir: Path,
+        *,
+        instruction: str,
+        instruction_file: str,
+        python_entrypoint: Path,
+        local_name: str,
+        version: str,
+        description: str,
+        author: str,
+        registry_slug: str,
+        source_url: str,
+        capabilities: list[str],
+        intents: list[str],
+    ) -> dict[str, Any]:
+        source = python_entrypoint.read_text(encoding="utf-8", errors="replace")
+        permissions = []
+        if re.search(r"\b(?:requests|urllib|httpx|aiohttp|selenium|playwright)\b", source):
+            permissions.append("network")
+        if re.search(r"\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bmkdir\s*\(", source):
+            permissions.append("filesystem_write")
+        relative_entrypoint = python_entrypoint.relative_to(skill_dir.resolve()).as_posix()
+        tool_name = cls._sanitize_tool_name(python_entrypoint.stem)
+        inferred_parameters = infer_parameters_from_instruction(
+            instruction,
+            entrypoint_names=[
+                python_entrypoint.name,
+                python_entrypoint.stem,
+                local_name,
+                registry_slug,
+            ],
+        )
+        argument_order = [str(parameter["name"]) for parameter in inferred_parameters]
+        properties = {
+            str(parameter["name"]): {
+                "type": str(parameter.get("type") or "string"),
+                "description": str(parameter.get("description") or ""),
+            }
+            for parameter in inferred_parameters
+        }
+        required = [
+            str(parameter["name"])
+            for parameter in inferred_parameters
+            if bool(parameter.get("required", True))
+        ]
+        return {
+            "name": local_name,
+            "version": version,
+            "description": description,
+            "author": author,
+            "format": "serana_standardized",
+            "runtime": "script",
+            "instruction_file": instruction_file,
+            "entrypoint": relative_entrypoint,
+            "registry_slug": registry_slug,
+            "source_url": source_url,
+            "agent_type": "all",
+            "max_instances": 1,
+            "capabilities": capabilities,
+            "intents": intents,
+            "permissions": permissions,
+            "script": {
+                "adapter": "python_cli",
+                "timeout_seconds": 30,
+                "max_input_chars": 8192,
+                "max_output_chars": 65536,
+                "argument_order": argument_order,
+                "output_format": "text",
+            },
+            "tools": [
+                {
+                    "name": tool_name,
+                    "description": description,
+                    "input_schema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
+                }
+            ],
+        }
+
     @staticmethod
     def _build_instruction_manifest(
         *,
+        instruction_file: str,
         local_name: str,
         version: str,
         description: str,
@@ -246,7 +401,7 @@ class SkillStandardizer:
             "author": author,
             "format": "serana_standardized",
             "runtime": "instruction",
-            "instruction_file": "SKILL.md",
+            "instruction_file": instruction_file,
             "entrypoint": None,
             "registry_slug": registry_slug,
             "source_url": source_url,

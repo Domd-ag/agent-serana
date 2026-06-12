@@ -160,6 +160,7 @@ class SkillManager:
             if skill.is_enabled
             and skill.runtime in {"python", "script"}
             and skill.name != "browser"
+            and skill.name != "memory_manager"
             and bool(skill.manifest.tools)
         ]
 

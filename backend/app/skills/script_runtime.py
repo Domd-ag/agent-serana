@@ -228,6 +228,58 @@ class PythonScriptAdapter(_ScriptAdapterBase):
         return self._decorate_result(result, tool)
 
 
+class PythonCliScriptAdapter(_ScriptAdapterBase):
+    """Run a SkillHub-style Python CLI script with positional arguments."""
+
+    def __init__(self, skill_path: Path, manifest: SkillPackageManifest):
+        super().__init__(skill_path, manifest)
+        self.entrypoint = self._resolve_declared_entrypoint(manifest.entrypoint, ".py")
+
+    def _build_positional_arguments(self, tool: SkillTool, arguments: dict[str, Any]) -> list[str]:
+        order = list(self.config.argument_order) or list(tool.input_schema.properties)
+        values: list[str] = []
+        for name in order:
+            if name not in arguments:
+                continue
+            value = arguments[name]
+            if isinstance(value, (dict, list)):
+                values.append(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+            elif isinstance(value, bool):
+                values.append("true" if value else "false")
+            else:
+                values.append(str(value))
+        return values
+
+    async def _run_once(self, tool: SkillTool, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.config.adapter.lower() != "python_cli":
+            raise ScriptSkillError(f"不支持的 Script Skill adapter：{self.config.adapter}")
+        self._validate_permissions()
+        self._validate_input_size(tool, arguments)
+        positional_arguments = self._build_positional_arguments(tool, arguments)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-X",
+            "utf8",
+            str(self.entrypoint),
+            *positional_arguments,
+            cwd=str(self.skill_path),
+            env=self._build_environment(),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await self._collect_process_output(process)
+        text = stdout.strip()
+        if not text:
+            raise ScriptSkillError("Python CLI Script 没有返回可展示内容。")
+        if self.config.output_format == "json":
+            try:
+                return self._decorate_result(json.loads(text), tool)
+            except json.JSONDecodeError as exc:
+                raise ScriptSkillError("Python CLI Script stdout 必须返回 JSON。") from exc
+        return self._decorate_result({"summary": text, "content": text}, tool)
+
+
 class ShellScriptAdapter(_ScriptAdapterBase):
     """Run a SkillHub-provided shell Skill through a discovered Bash runtime."""
 
@@ -326,6 +378,8 @@ class ScriptSkillRunner:
         adapter = config.adapter.lower()
         if adapter == "python":
             return PythonScriptAdapter(skill_path, manifest).build_tools()
+        if adapter == "python_cli":
+            return PythonCliScriptAdapter(skill_path, manifest).build_tools()
         if adapter == "shell":
             return ShellScriptAdapter(skill_path, manifest).build_tools()
         raise ScriptSkillError(f"不支持的 Script Skill adapter：{config.adapter}")

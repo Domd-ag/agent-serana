@@ -43,7 +43,8 @@ from app.core.security import encrypt_data
 from app.main import app
 from app.memory import MemoryInjector, MemoryService, ProfileFactsManager, ResidentMemoryManager, WorkingMemoryManager
 from app.skills import SkillManager
-from app.skills.models import MarketplaceSearchResponse, MarketplaceSkillSummary
+from app.skills.standardizer import SkillStandardizer
+from app.skills.models import MarketplaceSearchResponse, MarketplaceSkillSummary, SkillPackageManifest
 from app.skills.validator import SkillValidator
 
 
@@ -211,6 +212,45 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(is_valid)
         self.assertIsNone(error)
+
+    def test_standardizer_builds_python_cli_invocation_from_quickstart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "scripts").mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                "# Restaurant Crosscheck\n\nUse this skill to compare restaurant recommendations.",
+                encoding="utf-8",
+            )
+            (skill_dir / "QUICKSTART.md").write_text(
+                '## Quick Start\n\n```bash\npython3 scripts/crosscheck.py "上海静安区" "日式料理"\n```\n',
+                encoding="utf-8",
+            )
+            (skill_dir / "scripts" / "crosscheck.py").write_text("print('ok')\n", encoding="utf-8")
+
+            manifest = SkillStandardizer.standardize_marketplace_package(
+                skill_dir,
+                local_name="restaurant_crosscheck",
+                version="1.0.0",
+                description="Cross-check restaurants.",
+                author="SkillHub",
+                registry_slug="restaurant-crosscheck",
+                source_url="https://skillhub.cn/skills/restaurant-crosscheck",
+                capabilities=[],
+                intents=[],
+            )
+            invocation_metadata = SkillManager._build_invocation_metadata(
+                SkillPackageManifest(**manifest),
+                (skill_dir / manifest["instruction_file"]).read_text(encoding="utf-8"),
+            )
+
+        self.assertEqual(manifest["runtime"], "script")
+        self.assertEqual(manifest["script"]["adapter"], "python_cli")
+        self.assertEqual(manifest["entrypoint"], "scripts/crosscheck.py")
+        self.assertEqual(manifest["script"]["argument_order"], ["city", "cuisine"])
+        self.assertEqual(manifest["tools"][0]["input_schema"]["required"], ["city", "cuisine"])
+        self.assertIn("@restaurant_crosscheck", invocation_metadata["invocation_examples"][0])
+        self.assertIn("上海静安区", invocation_metadata["invocation_examples"][0])
+        self.assertIn("日式料理", invocation_metadata["invocation_examples"][0])
 
     def _fake_instruction_skill(self, name: str, description: str, slug: str):
         return SimpleNamespace(
@@ -3496,6 +3536,65 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(keys), 1)
         for prompt in prompts:
             self.assertTrue(_is_html_preview_request(prompt))
+        self.assertFalse(_html_preview_should_reuse_cache("生成快速排序网页动画"))
+        self.assertTrue(_html_preview_should_reuse_cache("之前生成的快速排序动画"))
+
+    async def test_html_preview_fresh_request_does_not_return_stale_topic_cache(self):
+        state = {
+            "user_input": "用网页动画形式演示一下快速排序",
+            "original_user_input": "用网页动画形式演示一下快速排序",
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+        calls = []
+
+        async def fake_create_html_preview(title: str, html: str, cache_key: str = ""):
+            calls.append({"title": title, "html": html, "cache_key": cache_key})
+            if not html and cache_key:
+                return {
+                    "cached": True,
+                    "artifact": {
+                        "kind": "html_preview",
+                        "filename": "stale.html",
+                        "title": title,
+                        "mime_type": "text/html",
+                        "size_bytes": 1,
+                        "download_url": "/api/v1/browser/previews/stale.html",
+                    },
+                    "artifact_url": "/api/v1/browser/previews/stale.html",
+                }
+            return {
+                "title": title,
+                "path": "D:/agent-serana/backend/skills_store/browser/previews/quicksort-new.html",
+                "artifact": {
+                    "kind": "html_preview",
+                    "filename": "quicksort-new.html",
+                    "title": title,
+                    "mime_type": "text/html",
+                    "size_bytes": len(html.encode("utf-8")),
+                    "download_url": "/api/v1/browser/previews/quicksort-new.html",
+                },
+                "artifact_url": "/api/v1/browser/previews/quicksort-new.html",
+                "mime_type": "text/html",
+                "summary": "已生成可打开的演示页面：quicksort-new.html",
+            }
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "create_html_preview":
+                return fake_create_html_preview
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+            result = await try_lightweight_conversation(state, BrowserPreviewRouteLLM())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["html"])
+        self.assertTrue(calls[0]["cache_key"])
+        self.assertNotIn("我找到之前生成过的演示页", result["final_response"])
 
     async def test_html_preview_modification_followup_regenerates_instead_of_cache(self):
         cache_key = _html_preview_request_cache_key("快速排序动画")
