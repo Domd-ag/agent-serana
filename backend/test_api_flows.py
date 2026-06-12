@@ -21,7 +21,10 @@ from app.agents.serana.context import (
 from app.agents.forge import ForgeAgent
 from app.agents.serana import SeranaAgent
 from app.agents.serana.nodes import (
+    _html_preview_cache_hash,
+    _html_preview_data_dir,
     _html_preview_request_cache_key,
+    _html_preview_should_reuse_cache,
     _is_html_preview_request,
     _parse_json_object,
     _sanitize_non_code_command_reply,
@@ -3493,6 +3496,105 @@ class ApiFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(keys), 1)
         for prompt in prompts:
             self.assertTrue(_is_html_preview_request(prompt))
+
+    async def test_html_preview_modification_followup_regenerates_instead_of_cache(self):
+        cache_key = _html_preview_request_cache_key("快速排序动画")
+        preview_dir = _html_preview_data_dir() / "previews"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        cached_filename = "unit-quicksort-old.html"
+        cache_path = preview_dir / "preview-cache.json"
+        old_cache_text = cache_path.read_text(encoding="utf-8") if cache_path.exists() else ""
+        cache_data = json.loads(old_cache_text) if old_cache_text else {}
+        cache_data[_html_preview_cache_hash(cache_key)] = cached_filename
+        cache_path.write_text(json.dumps(cache_data, ensure_ascii=False), encoding="utf-8")
+        old_preview_path = preview_dir / cached_filename
+        old_preview_path.write_text(
+            "<!doctype html><html><body><h1>旧版快速排序演示</h1><button id=\"start\">开始</button>"
+            "<script>document.getElementById('start').addEventListener('click',()=>{});</script></body></html>",
+            encoding="utf-8",
+        )
+        state = {
+            "user_input": "改成速度可以调节的",
+            "original_user_input": "改成速度可以调节的",
+            "recent_history_context": (
+                "assistant: 快速排序动画已经生成了。打开下面预览就能直接看到。"
+                "如果觉得速度或元素数量不合适，可以直接说需要改成什么样，我可以重新生成。"
+            ),
+            "thinking_blocks": [],
+            "tool_calls": [],
+        }
+        calls = []
+
+        async def fake_create_html_preview(title: str, html: str, cache_key: str = ""):
+            calls.append({"title": title, "html": html, "cache_key": cache_key})
+            if not html and cache_key:
+                return {
+                    "cached": True,
+                    "artifact": {
+                        "kind": "html_preview",
+                        "filename": "stale.html",
+                        "title": title,
+                        "mime_type": "text/html",
+                        "size_bytes": 1,
+                        "download_url": "/api/v1/browser/previews/stale.html",
+                    },
+                    "artifact_url": "/api/v1/browser/previews/stale.html",
+                }
+            return {
+                "title": title,
+                "path": "D:/agent-serana/backend/skills_store/browser/previews/quicksort-speed.html",
+                "artifact": {
+                    "kind": "html_preview",
+                    "filename": "quicksort-speed.html",
+                    "title": title,
+                    "mime_type": "text/html",
+                    "size_bytes": len(html.encode("utf-8")),
+                    "download_url": "/api/v1/browser/previews/quicksort-speed.html",
+                },
+                "artifact_url": "/api/v1/browser/previews/quicksort-speed.html",
+                "mime_type": "text/html",
+                "summary": "已生成可打开的演示页面：quicksort-speed.html",
+            }
+
+        class CapturingPreviewLLM(BrowserPreviewRouteLLM):
+            def __init__(self):
+                super().__init__()
+                self.preview_generation_prompt = ""
+
+            async def ainvoke(self, messages):
+                system_prompt = messages[0].content
+                if "You generate a single self-contained HTML document for Serana's in-app preview surface." in system_prompt:
+                    self.preview_generation_prompt = str(messages[-1].content)
+                return await super().ainvoke(messages)
+
+        original_get_tool_function = SkillManager.get_tool_function
+
+        def patched_get_tool_function(self, skill_name: str, tool_name: str):
+            if skill_name == "browser" and tool_name == "create_html_preview":
+                return fake_create_html_preview
+            return original_get_tool_function(self, skill_name, tool_name)
+
+        llm = CapturingPreviewLLM()
+        try:
+            with patch.object(SkillManager, "get_tool_function", patched_get_tool_function):
+                result = await try_lightweight_conversation(state, llm)
+        finally:
+            if old_cache_text:
+                cache_path.write_text(old_cache_text, encoding="utf-8")
+            elif cache_path.exists():
+                cache_path.unlink()
+            if old_preview_path.exists():
+                old_preview_path.unlink()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["execution_mode"], "direct")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["html"])
+        self.assertEqual(calls[0]["cache_key"], cache_key)
+        self.assertFalse(_html_preview_should_reuse_cache("改成速度可以调节的"))
+        self.assertIn("快速排序", llm.preview_generation_prompt)
+        self.assertIn("旧版快速排序演示", llm.preview_generation_prompt)
+        self.assertIn("速度可以调节", llm.preview_generation_prompt)
 
     async def test_skill_manager_shutdown_closes_browser_skill(self):
         manager = SkillManager()

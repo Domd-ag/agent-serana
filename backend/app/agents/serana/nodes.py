@@ -1497,6 +1497,153 @@ def _html_preview_topic_key(user_input: str) -> str:
     return ""
 
 
+def _is_html_preview_modification_request(user_input: str) -> bool:
+    raw_text = str(user_input or "").strip()
+    lowered = raw_text.lower()
+    if not raw_text:
+        return False
+
+    modification_terms = (
+        "改成",
+        "改为",
+        "改一下",
+        "修改",
+        "调整",
+        "调节",
+        "加上",
+        "添加",
+        "增加",
+        "换成",
+        "变成",
+        "重新生成",
+        "重做",
+        "重新做",
+        "再生成",
+        "速度",
+        "滑块",
+        "可调",
+        "可调整",
+        "modify",
+        "change",
+        "update",
+        "adjust",
+        "add",
+        "regenerate",
+        "slider",
+        "speed",
+    )
+    return any(term in raw_text or term in lowered for term in modification_terms)
+
+
+def _html_preview_context_text(state: dict[str, Any] | None) -> str:
+    if not state:
+        return ""
+    parts = [
+        str(state.get(key) or "")
+        for key in (
+            "recent_history_context",
+            "working_memory_context",
+            "memory_context",
+        )
+    ]
+    return "\n".join(part for part in parts if part.strip()).strip()
+
+
+def _html_preview_data_dir() -> Path:
+    configured = str(get_settings().SERANA_BROWSER_DATA_DIR or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[3] / "skills_store" / "browser"
+
+
+def _html_preview_cache_hash(cache_key: str) -> str:
+    text = str(cache_key or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _safe_read_html_preview_file(filename: str) -> str:
+    normalized = Path(str(filename or "").strip()).name
+    if not normalized or normalized != str(filename or "").strip() or not normalized.endswith(".html"):
+        return ""
+    preview_dir = _html_preview_data_dir() / "previews"
+    path = (preview_dir / normalized).resolve()
+    try:
+        if preview_dir.resolve() not in path.parents:
+            return ""
+        if not path.exists() or not path.is_file():
+            return ""
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _load_html_preview_cache() -> dict[str, Any]:
+    cache_path = _html_preview_data_dir() / "previews" / "preview-cache.json"
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_html_preview_filenames_from_context(context: str) -> list[str]:
+    filenames: list[str] = []
+    for match in re.finditer(r"(?:browser/previews/|previews/)?([A-Za-z0-9_.-]+\.html)", str(context or "")):
+        filename = Path(match.group(1)).name
+        if filename and filename not in filenames:
+            filenames.append(filename)
+    return filenames
+
+
+def _load_existing_html_preview_document(
+    *,
+    cache_key: str,
+    context_text: str,
+) -> str:
+    normalized_cache_key = _html_preview_cache_hash(cache_key)
+    if normalized_cache_key:
+        cached_filename = str(_load_html_preview_cache().get(normalized_cache_key) or "").strip()
+        cached_html = _safe_read_html_preview_file(cached_filename)
+        if cached_html:
+            return cached_html
+
+    for filename in _extract_html_preview_filenames_from_context(context_text):
+        cached_html = _safe_read_html_preview_file(filename)
+        if cached_html:
+            return cached_html
+    return ""
+
+
+def _has_recent_html_preview_context(state: dict[str, Any] | None) -> bool:
+    context = _html_preview_context_text(state)
+    if not context:
+        return False
+    lowered = context.lower()
+    preview_terms = (
+        "html_preview",
+        "browser.create_html_preview",
+        "/browser/previews/",
+        ".html",
+        "打开演示",
+        "演示页",
+        "演示页面",
+        "网页动画",
+        "动画已经生成",
+        "生成过的演示",
+        "可打开的演示",
+    )
+    if any(term in context or term in lowered for term in preview_terms):
+        return True
+    return bool(_html_preview_topic_key(context)) and any(
+        term in context or term in lowered
+        for term in ("演示", "动画", "展示", "可视化", "demo", "animation", "visual")
+    )
+
+
 def _html_preview_title_for_request(user_input: str) -> str:
     raw_text = str(user_input or "")
     lowered = raw_text.lower()
@@ -1521,8 +1668,20 @@ def _html_preview_request_cache_key(user_input: str) -> str:
     ).hexdigest()
 
 
-def _resolve_html_preview_shortcut_intent(user_input: str) -> dict[str, Any] | None:
-    if not _is_html_preview_request(user_input):
+def _html_preview_should_reuse_cache(user_input: str) -> bool:
+    return not _is_html_preview_modification_request(user_input)
+
+
+def _resolve_html_preview_shortcut_intent(
+    user_input: str,
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    is_preview_request = _is_html_preview_request(user_input)
+    is_modification_followup = (
+        _is_html_preview_modification_request(user_input)
+        and _has_recent_html_preview_context(state)
+    )
+    if not (is_preview_request or is_modification_followup):
         return None
 
     skill_manager = SkillManager()
@@ -1531,7 +1690,12 @@ def _resolve_html_preview_shortcut_intent(user_input: str) -> dict[str, Any] | N
     if not tool:
         return None
 
-    title = _html_preview_title_for_request(user_input)
+    context_text = _html_preview_context_text(state)
+    subject_text = user_input
+    if is_modification_followup and not _html_preview_topic_key(user_input):
+        subject_text = f"{user_input}\n{context_text}"
+
+    title = _html_preview_title_for_request(subject_text)
     draft_html = (
         f"<section><h1>{title}</h1>"
         "<div id=\"visualization\"></div>"
@@ -1539,7 +1703,16 @@ def _resolve_html_preview_shortcut_intent(user_input: str) -> dict[str, Any] | N
         "<p id=\"status\">\u7528\u52a8\u753b\u5c55\u793a\u5173\u952e\u6b65\u9aa4\u3002</p>"
         "</section>"
     )
-    cache_key = _html_preview_request_cache_key(user_input)
+    cache_key = _html_preview_request_cache_key(subject_text)
+    generation_request = user_input
+    if is_modification_followup:
+        context_excerpt = context_text[-2400:]
+        generation_request = (
+            "这是对上一轮已经生成的 HTML 演示页的修改请求。请优先修改上一版 HTML，"
+            "保留可用结构和交互，只按用户要求改动并输出完整可运行页面。\n\n"
+            f"最近上下文：\n{context_excerpt}\n\n"
+            f"用户修改要求：\n{user_input}"
+        )
     return {
         "full_name": "browser.create_html_preview",
         "skill_name": "browser",
@@ -1547,6 +1720,9 @@ def _resolve_html_preview_shortcut_intent(user_input: str) -> dict[str, Any] | N
         "arguments": {"title": title, "html": draft_html, "cache_key": cache_key},
         "callable": tool,
         "source": "html_preview_shortcut",
+        "generation_request": generation_request,
+        "modify_existing_preview": is_modification_followup,
+        "preview_context": context_text,
     }
 
 
@@ -1907,9 +2083,11 @@ async def _generate_html_preview_arguments(
     *,
     user_input: str,
     tool_input: dict[str, Any],
+    existing_html: str = "",
 ) -> dict[str, Any] | None:
     title = str(tool_input.get("title") or "Serana 演示").strip()[:80] or "Serana 演示"
     draft_html = str(tool_input.get("html") or "").strip()
+    previous_html = str(existing_html or "").strip()
     repair_feedback = ""
 
     system_prompt = (
@@ -1924,13 +2102,21 @@ async def _generate_html_preview_arguments(
         "- Render visible content immediately.\n"
         "- If there are visible controls, wire each one to a real behavior.\n"
         "- Any button, input, select, textarea, or role=button control must have an inline event binding such as addEventListener or onclick.\n"
-        "- Use Chinese UI copy unless the user explicitly asked for another language."
+        "- Use Chinese UI copy unless the user explicitly asked for another language.\n"
+        "- If a previous HTML document is provided, edit that document instead of starting from scratch whenever possible."
     )
 
     for _ in range(2):
+        previous_block = (
+            "Previous HTML document to modify:\n"
+            f"{previous_html}\n\n"
+            if previous_html
+            else ""
+        )
         prompt = (
             f"User request:\n{user_input}\n\n"
             f"Preview title:\n{title}\n\n"
+            f"{previous_block}"
             "Current draft from the routing step (may be incomplete):\n"
             f"{draft_html or '(empty draft)'}\n\n"
             f"{repair_feedback}"
@@ -4102,8 +4288,17 @@ async def _execute_resolved_direct_tool_intent(
     )
 
     if planned_tool_name == "browser.create_html_preview":
+        generation_user_input = str(tool_intent.get("generation_request") or user_input)
+        modify_existing_preview = bool(tool_intent.get("modify_existing_preview") or False)
+        preview_context = str(tool_intent.get("preview_context") or "")
         cache_key = str(planned_args.get("cache_key") or "").strip()
-        if cache_key:
+        existing_preview_html = ""
+        if modify_existing_preview:
+            existing_preview_html = _load_existing_html_preview_document(
+                cache_key=cache_key,
+                context_text=preview_context,
+            )
+        if cache_key and not modify_existing_preview:
             cached_args = {
                 "title": str(planned_args.get("title") or "Serana \u6f14\u793a"),
                 "html": "",
@@ -4145,8 +4340,9 @@ async def _execute_resolved_direct_tool_intent(
 
         generated_preview_args = await _generate_html_preview_arguments(
             llm,
-            user_input=user_input,
+            user_input=generation_user_input,
             tool_input=planned_args,
+            existing_html=existing_preview_html,
         )
         if generated_preview_args is None:
             return _build_html_preview_failure_state(
@@ -4407,7 +4603,7 @@ async def try_lightweight_conversation(
                 reason="The user sent a context-dependent follow-up, so Serana continued from the recent thread.",
             )
 
-    html_preview_intent = _resolve_html_preview_shortcut_intent(user_input)
+    html_preview_intent = _resolve_html_preview_shortcut_intent(user_input, state)
     if html_preview_intent is not None:
         planned_state = _record_tool_selection(
             state,
