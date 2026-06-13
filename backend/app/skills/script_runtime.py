@@ -145,8 +145,31 @@ class _ScriptAdapterBase:
 
         if process.returncode != 0:
             detail = stderr.strip().splitlines()[-1] if stderr.strip() else "未知错误"
+            missing_module = self._extract_missing_module(stderr)
+            if missing_module:
+                detail = self._format_missing_dependency_error(missing_module)
             raise ScriptSkillError(f"Script Skill 执行失败：{detail[:300]}")
         return stdout, stderr
+
+    @staticmethod
+    def _extract_missing_module(stderr: str) -> str | None:
+        match = re.search(r"ModuleNotFoundError:\s+No module named ['\"]([^'\"]+)['\"]", stderr)
+        return match.group(1) if match else None
+
+    def _format_missing_dependency_error(self, module_name: str) -> str:
+        dependencies = self.manifest.dependencies or {}
+        requirements_file = dependencies.get("requirements_file") if isinstance(dependencies, dict) else None
+        if requirements_file:
+            requirements_path = (self.skill_path / str(requirements_file)).resolve()
+            try:
+                requirements_path.relative_to(self.skill_path)
+                return (
+                    f"缺少 Python 依赖模块 {module_name}。请在后端虚拟环境中执行："
+                    f"python -m pip install -r {requirements_path}"
+                )
+            except ValueError:
+                pass
+        return f"缺少 Python 依赖模块 {module_name}。请在后端虚拟环境中安装该 skill 的 requirements.txt。"
 
     def _decorate_result(self, result: Any, tool: SkillTool) -> dict[str, Any]:
         if not isinstance(result, dict):

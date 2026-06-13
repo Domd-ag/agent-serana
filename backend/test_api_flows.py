@@ -226,6 +226,10 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
             (skill_dir / "scripts" / "crosscheck.py").write_text("print('ok')\n", encoding="utf-8")
+            (skill_dir / "scripts" / "requirements.txt").write_text(
+                "requests>=2.31.0\nbeautifulsoup4>=4.12.0\n",
+                encoding="utf-8",
+            )
 
             manifest = SkillStandardizer.standardize_marketplace_package(
                 skill_dir,
@@ -246,6 +250,8 @@ class InstructionSkillRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manifest["runtime"], "script")
         self.assertEqual(manifest["script"]["adapter"], "python_cli")
         self.assertEqual(manifest["entrypoint"], "scripts/crosscheck.py")
+        self.assertEqual(manifest["dependencies"]["requirements_file"], "scripts/requirements.txt")
+        self.assertIn("beautifulsoup4>=4.12.0", manifest["dependencies"]["pip"])
         self.assertEqual(manifest["script"]["argument_order"], ["city", "cuisine"])
         self.assertEqual(manifest["tools"][0]["input_schema"]["required"], ["city", "cuisine"])
         self.assertIn("@restaurant_crosscheck", invocation_metadata["invocation_examples"][0])

@@ -44,7 +44,7 @@ class SkillPackageManifest(BaseModel):
     capabilities: List[str] = Field(default_factory=list)
     intents: List[str] = Field(default_factory=list)
     tools: List[SkillTool] = Field(default_factory=list)
-    dependencies: Optional[Dict[str, str]] = None
+    dependencies: Optional[Dict[str, Any]] = None
     permissions: Optional[List[str]] = None
     script: Optional[ScriptRuntimeConfig] = None
 

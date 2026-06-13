@@ -39,6 +39,7 @@ skills/
   - 会识别代码块里的 `./tool.sh 上海`、`bash tool.sh 北京 3`、已有 `@skill 参数` 等命令。
   - 会从 Markdown 参数表和项目符号里提取参数说明、示例值和可选/必填状态。
   - 对没有 `skill.json` 的 SkillHub shell 包，`standardizer.py` 会把这些信息写入生成的 `skill.json`，保证脚本参数顺序和前端示例一致。
+  - 对 Python CLI 包，会优先读取入口脚本同目录的 `requirements.txt`，并写入 `dependencies.requirements_file`，执行时如果缺 Python 模块会返回明确的依赖安装提示。
   - `run_mode_description`：说明该技能如何参与 Serana。
   - `invocation_name`：聊天框里的 `@` 名称。
   - `invocation_parameters`：参数名、类型、描述和是否必填。

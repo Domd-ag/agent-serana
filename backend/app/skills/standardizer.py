@@ -194,6 +194,30 @@ class SkillStandardizer:
         return None
 
     @staticmethod
+    def _read_python_requirements(skill_dir: Path, python_entrypoint: Path) -> dict[str, Any] | None:
+        candidates = [
+            python_entrypoint.parent / "requirements.txt",
+            skill_dir / "requirements.txt",
+        ]
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            packages: list[str] = []
+            for raw_line in candidate.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("-", "--")):
+                    continue
+                packages.append(line)
+            if packages:
+                return {
+                    "requirements_file": candidate.relative_to(skill_dir.resolve()).as_posix(),
+                    "pip": packages,
+                }
+        return None
+
+    @staticmethod
     def _validate_declared_runtime(skill_dir: Path, manifest: dict[str, Any]) -> None:
         script = manifest.get("script") if isinstance(manifest.get("script"), dict) else {}
         if str(script.get("adapter") or "").lower() != "shell":
@@ -321,6 +345,7 @@ class SkillStandardizer:
         if re.search(r"\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bmkdir\s*\(", source):
             permissions.append("filesystem_write")
         relative_entrypoint = python_entrypoint.relative_to(skill_dir.resolve()).as_posix()
+        dependencies = cls._read_python_requirements(skill_dir, python_entrypoint)
         tool_name = cls._sanitize_tool_name(python_entrypoint.stem)
         inferred_parameters = infer_parameters_from_instruction(
             instruction,
@@ -359,6 +384,7 @@ class SkillStandardizer:
             "max_instances": 1,
             "capabilities": capabilities,
             "intents": intents,
+            "dependencies": dependencies,
             "permissions": permissions,
             "script": {
                 "adapter": "python_cli",
