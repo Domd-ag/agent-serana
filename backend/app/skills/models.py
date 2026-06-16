@@ -33,7 +33,7 @@ class SkillPackageManifest(BaseModel):
     version: str
     description: str
     author: Optional[str] = None
-    format: str = "sebastian_package"
+    format: str = "serana_package"
     runtime: str = "python"
     instruction_file: str = "SKILL.md"
     entrypoint: Optional[str] = "__init__.py"
@@ -55,7 +55,7 @@ class SkillPackage(BaseModel):
     version: str
     description: str
     author: Optional[str] = None
-    format: str = "sebastian_package"
+    format: str = "serana_package"
     runtime: str = "python"
     agent_type: str
     max_instances: int

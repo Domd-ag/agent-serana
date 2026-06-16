@@ -143,4 +143,4 @@ serana/
 - session flow 单轮最多执行 6 个步骤、最多打开 2 个页面；相同页面上的重复动作会被停止，失败步骤后不会继续 Observe。
 - 浏览器失败回复会转成用户可读说明，不再把内部 URL、文件路径、原始异常或网页片段直接作为最终答案。
 - 内置轻量运行时只访问公开 `http/https` 页面，并限制响应体积；页面交互、截图和视觉观察在没有完整浏览器运行时时会明确返回“不支持”。
-- 每个浏览器步骤都会即时发出 `tool_call` 流式事件，Android 端按 `Browser Open`、`Browser Observe`、`Browser Act` 展示，效果对齐 Sebastian 的执行链。
+- 每个浏览器步骤都会即时发出 `tool_call` 流式事件，Android 端按 `Browser Open`、`Browser Observe`、`Browser Act` 展示，形成稳定的执行链摘要。

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Built-in browser tools for opening and observing public web pages.",
   "author": "Serana",
-  "format": "sebastian_package",
+  "format": "serana_package",
   "runtime": "python",
   "instruction_file": "SKILL.md",
   "entrypoint": "__init__.py",

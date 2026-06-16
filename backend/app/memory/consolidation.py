@@ -48,7 +48,7 @@ class ConsolidationDecision:
 class MemoryConsolidationService:
     """Extracts durable memory artifacts from chat turns.
 
-    The service follows a Sebastian-style shape: first produce candidate artifacts
+    The service follows Serana's memory pipeline: first produce candidate artifacts
     from the conversation window, then validate/resolve/persist them through local
     managers. LLM output never mutates storage directly.
     """

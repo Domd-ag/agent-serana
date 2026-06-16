@@ -22,7 +22,7 @@ backend/
 - `app/agents/` 实现 Serana 主 agent 与 Forge 执行 worker 的运行时。
 - `app/core/` 放置数据库、模型、schema、LLM 网关、审计、日志等共享基础设施。
 - `app/memory/` 管理长期事实记忆、resident snapshot、working memory、历史检索和 prompt 注入。
-- `app/skills/` 负责 Sebastian 风格 skill 的加载、校验、启停、SkillHub 搜索/安装、更新、卸载和生命周期状态。
+- `app/skills/` 负责 Serana 标准 skill 的加载、校验、启停、SkillHub 搜索/安装、更新、卸载和生命周期状态。
 - `skills_store/` 存放项目内置 skill；本地开发未配置 `SERANA_SKILLS_DIR` 时，也会作为 managed skill 的默认仓库。
 
 ## 常用入口

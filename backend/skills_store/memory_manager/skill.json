@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Serana 内置记忆工具，用于显式保存、查询和管理当前会话工作记忆。",
   "author": "Serana",
-  "format": "sebastian_package",
+  "format": "serana_package",
   "runtime": "python",
   "instruction_file": "SKILL.md",
   "entrypoint": "__init__.py",

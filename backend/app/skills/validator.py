@@ -7,7 +7,7 @@ from app.skills.models import SkillPackageManifest
 
 
 class SkillValidator:
-    """Validate Sebastian-style skill packages."""
+    """Validate Serana skill packages."""
 
     PACKAGE_METADATA_FILE = "skill.json"
     SUPPORTED_RUNTIMES = {"python", "instruction", "script"}

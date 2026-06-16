@@ -6,7 +6,7 @@
 
 - `ChatScreen.kt`
   - 聊天主界面、流式状态、审批弹窗、键盘 inset、HTML 预览浮层和执行链展示。
-  - thinking blocks 和 tool traces 会合并成 Sebastian 风格的 `Thought for Ns` 执行摘要。
+  - thinking blocks 和 tool traces 会合并成 Serana 的 `Thought for Ns` 执行摘要。
   - 浏览器步骤默认展示为 `Browser Open`、`Browser Observe`、`Browser Act` 等用户可读块。
 - `SkillsScreen.kt`
   - 技能列表、SkillHub 市场、本地 ZIP 导入、生命周期状态、更新、范围切换和卸载入口。

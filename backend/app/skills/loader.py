@@ -13,7 +13,7 @@ tool_logger = get_logger("app.tool.skills")
 
 
 class SkillLoader:
-    """Load Sebastian-style skill packages."""
+    """Load Serana skill packages."""
 
     PACKAGE_METADATA_FILE = "skill.json"
 
